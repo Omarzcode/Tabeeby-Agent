@@ -82,3 +82,10 @@ def test_retry_helper_retries_transient_only():
     import pytest
     with pytest.raises(ValueError):
         with_retries(lambda: (_ for _ in ()).throw(ValueError("bad request")))
+
+
+def test_ollama_provider_sends_api_key_for_cloud():
+    from stores.llm.providers.OllamaProvider import OllamaProvider
+    p = OllamaProvider(api_key="abc", api_url="https://ollama.com")
+    assert p.client._client.headers["authorization"] == "Bearer abc"
+    assert "authorization" not in OllamaProvider(api_key=None, api_url=None).client._client.headers

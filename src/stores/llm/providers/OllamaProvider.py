@@ -38,7 +38,10 @@ class OllamaProvider(LLMInterface):
             return
 
         
-        self.client=Client(host=self.api_url)
+        # Ollama Cloud (https://ollama.com) needs the API key as a bearer token;
+        # a local daemon ignores it (cloud models there need `ollama signin`).
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else None
+        self.client=Client(host=self.api_url, headers=headers)
 
     def set_generation_model(self,model_id:str)->None:
         self.generation_model_id=model_id
