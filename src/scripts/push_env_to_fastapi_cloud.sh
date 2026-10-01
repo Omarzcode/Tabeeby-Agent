@@ -17,7 +17,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   key="$(echo "${line%%=*}" | xargs)"
   value="$(echo "${line#*=}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/")"
   [[ -z "$value" || "$key" =~ $SKIP_RE ]] && continue
-  if [[ "$key" =~ (KEY|TOKEN|SECRET|PASSWORD) ]]; then
+  if [[ "$key" =~ (KEY|TOKEN|SECRET|PASSWORD)$ ]]; then
     echo "secret  $key"
     fastapi cloud env set --secret "$key" "$value" >/dev/null
   else
