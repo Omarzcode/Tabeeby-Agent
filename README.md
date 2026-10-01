@@ -33,6 +33,10 @@
 * **🔗 Direct Booking Links**: Recommends verified doctors with direct Vezeeta booking URLs, fees in EGP, ratings, and exact clinic addresses.
 * **🌐 Medical Web Search**: Leverages Tavily API for supplementary clinical lookups, rare condition explanations, and drug interaction inquiries.
 * **💬 Omnichannel Availability**: Accessible via high-performance **FastAPI REST API** and interactive **Telegram Webhook Bot**.
+* **🧠 Skills (progressive disclosure)**: 7 medical skills (`skills/*/SKILL.md`) — emergency triage, doctor finder, Egyptian Arabic, medication info, lab results, pediatrics, mental health — loaded only when needed.
+* **🔌 MCP, both ways**: Tabeeby **is** an MCP server (`/mcp`, or stdio for Claude Desktop/Cursor) and can **borrow** tools from any external MCP server.
+* **🔁 Reliable goal loop**: per-message budget (steps, seconds, tool actions, USD), stuck-loop detection, and **self-verification in code** (grounded links, emergency number, language) with automatic refine → repair.
+* **📏 Evaluation**: 32 offline tests + a live eval set scored by code (11/11 passing) + a skill trigger bench.
 
 ---
 
@@ -88,246 +92,174 @@ flowchart TD
 
 ```text
 Tabeeby-Agent/
-├── .env.example                     # Centralized environment configuration template
-├── README.md                        # Project documentation & guides
+├── README.md
+├── docs/
+│   ├── tabeeby_report.tex           # LaTeX report: what was added & why (build: make docs)
+│   └── tabeeby_report.pdf
 └── src/
-    ├── Makefile                     # Make shortcuts for server launch & offline ingestion
-    ├── app.py                       # FastAPI application & lifespan management
-    ├── pyproject.toml               # Project dependencies & build configuration (uv)
-    ├── uv.lock                      # Locked dependency tree
+    ├── app.py                       # FastAPI app factory: /chat, /telegram, /mcp, /health, /skills, /tools
+    ├── environment.yml              # conda env (local dev)
+    ├── pyproject.toml / uv.lock     # dependencies (FastAPI Cloud installs from uv.lock)
+    ├── Makefile                     # make app | test | eval | mcp | telegram | deploy ...
     ├── agent/
-    │   ├── __init__.py
-    │   └── agent.py                 # Autonomous ReAct Agent engine & reasoning loop
-    ├── assets/
-    │   ├── database/
-    │   │   └── qdrant_db/           # Local embedded Qdrant database storage
-    │   └── files/
-    │       └── vezeeta.csv          # Vezeeta Egypt doctor catalog (~17K records)
-    ├── helpers/
-    │   ├── __init__.py
-    │   └── config.py                # Pydantic Settings & environment variables loader
-    ├── models/
-    │   ├── __init__.py
-    │   ├── doctor.py                # DoctorRecord model, data validation, & semantic builder
-    │   └── enums/
-    │       └── ResponseEnums.py     # Application response signal enums
-    ├── prompts/
-    │   └── prompt_templatet.py      # System prompts, clinical triage templates & guardrails
-    ├── routes/
-    │   ├── __init__.py
-    │   ├── chat.py                  # POST /chat REST endpoint
-    │   ├── telegram.py              # POST /telegram/webhook integration
-    │   └── schemes/
-    │       └── chat.py              # Request/Response Pydantic schemas for /chat
-    ├── scripts/
-    │   ├── README.md                # Documentation for offline batch scripts
-    │   ├── __init__.py
-    │   └── ingest_vezeeta.py        # Standalone offline ETL & Qdrant ingestion script
+    │   ├── agent.py                 # goal loop: skills + MCP tools + budget + verify→refine→repair
+    │   ├── budget.py                # steps / seconds / actions / USD budget
+    │   ├── safety.py                # deterministic red-flag detector (EN + Egyptian Arabic)
+    │   └── verifiers.py             # code verifiers + deterministic repair
+    ├── skills/                      # SKILL.md recipes (+ references/) — no Python needed
+    ├── mcp_server/                  # Tabeeby as an MCP server (tools, resources, prompts)
     ├── stores/
-    │   ├── llm/                     # LLM provider factory & interfaces (Gemini, OpenAI, Ollama)
-    │   └── vectordb/                # Qdrant Vector DB provider & filter builder
-    └── tools/
-        ├── __init__.py
-        ├── search_doctors.py        # DoctorTools semantic & hybrid search tool
-        ├── web_tools.py             # Tavily medical knowledge search tool
-        ├── memory.py                # File & memory helper tools
-        └── helpers.py               # Tool helper utilities
+    │   ├── llm/                     # Gemini / OpenAI / Groq / Ollama providers (+ retry/backoff)
+    │   ├── mcp/                     # MCP client: borrow tools from external servers
+    │   └── vectordb/                # Qdrant provider & filter builder
+    ├── tools/
+    │   ├── search_doctors.py        # hybrid search with normalised filters + graceful relaxation
+    │   ├── catalog.py               # area / specialty normaliser (aliases, Arabic, fuzzy)
+    │   ├── skills.py                # SkillLibrary: load_skill / read_skill_reference
+    │   └── web_tools.py             # Tavily medical web search
+    ├── telegram_bot/                # shared Telegram handler (webhook + polling), formatting
+    ├── routes/                      # chat, telegram webhook, info endpoints
+    ├── helpers/                     # config, bootstrap, session store
+    ├── evals/                       # live eval set + runner + skill trigger bench
+    ├── tests/                       # offline pytest suite (fake LLM, no keys needed)
+    └── scripts/                     # ingestion, telegram polling, vector check, cloud env push
 ```
 
 ---
 
 ## ⚙️ Prerequisites & Requirements
 
-* **Python**: `3.10` or higher
-* **Package Manager**: [`uv`](https://github.com/astral-sh/uv) (recommended) or `pip`
-* **Vector Database**: [Qdrant Cloud](https://cloud.qdrant.io) cluster or local embedded Qdrant (`assets/database/qdrant_db`)
-* **LLM & Embedding Provider**: [Google AI Studio](https://aistudio.google.com/) API Key (Gemini), OpenAI API Key, or local [Ollama](https://ollama.com/) instance
+* **Python** `3.10+` managed with **conda** (Miniconda/Anaconda)
+* **Vector Database**: [Qdrant Cloud](https://cloud.qdrant.io) cluster or local embedded Qdrant
+* **LLM & Embeddings**: Gemini (default), OpenAI, **Groq** (generation only) or Ollama
+* Optional: Tavily (web search), a Telegram bot token, a FastAPI Cloud account
 
 ---
 
-## 🚀 Quickstart & Installation
+## 🚀 Quickstart (conda)
 
-### 1. Clone the Repository
 ```bash
 git clone https://github.com/amr10w/Tabeeby-Agent.git
-cd Tabeeby-Agent
+cd Tabeeby-Agent/src
+conda env create -f environment.yml        # or: make env
+conda activate tabeeby-agent
+cp .env.example .env                       # then fill in your keys
+make test                                  # 32 offline tests, no keys needed
+make app                                   # http://127.0.0.1:8000/docs
 ```
 
-### 2. Set Up Virtual Environment & Dependencies
-
-Using **`uv`** (Recommended):
-```bash
-cd src
-uv venv
-source .venv/bin/activate   # On Windows: .venv\Scripts\activate
-uv sync
-```
-
-Using **Standard `pip`**:
-```bash
-cd src
-python3 -m venv .venv
-source .venv/bin/activate   # On Windows: .venv\Scripts\activate
-pip install -e .
-```
-
----
-
-## 🔑 Environment Configuration
-
-Create a `.env` file inside the `src/` directory (or copy from root `.env.example`):
-
-```ini
-# Application Identity
-APP_NAME=Tabeeby
-APP_VERSION=1.0.0
-
-# LLM Generation Configuration
-GENERATION_BACKEND=GEMINI
-GENERATION_MODEL_ID=gemini-2.5-flash
-GENERATION_DAFAULT_MAX_TOKENS=1500
-GENERATION_DAFAULT_TEMPERATURE=0.1
-INPUT_DAFAULT_MAX_CHARACTERS=1000
-
-# Provider API Keys
-GEMINI_API_KEY=your_gemini_api_key_here
-OPENAI_API_KEY=your_openai_api_key_here
-OPENAI_API_URL=https://api.openai.com/v1
-GROQ_API_KEY=your_groq_api_key_here
-GROQ_API_URL=https://api.groq.com/openai/v1
-OLLAMA_API_URL=http://localhost:11434
-
-# Embedding Configuration
-EMBEDDING_BACKEND=GEMINI
-EMBEDDING_MODEL_ID=text-embedding-004
-EMBEDDING_MODEL_SIZE=768
-
-# Vector Database (Qdrant)
-VECTOR_DB_BACKEND=QDRANT
-VECTOR_DB_PATH=qdrant_db
-VECTOR_DB_DISTANCE_METHOD=cosine
-VECTOR_DB_COLLECTION_NAME=vezeeta_doctors
-VECTOR_DB_URL=https://your-cluster-id.aws.cloud.qdrant.io
-VECTOR_DB_API_KEY=your_qdrant_api_key_here
-
-# Optional: Medical Web Search (Tavily)
-TAVILY_API_KEY=your_tavily_api_key_here
-
-# Optional: Telegram Webhook Bot
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
-TELEGRAM_WEBHOOK_URL=https://your-domain.com/telegram/webhook
-```
+All `make` targets run inside the `tabeeby-agent` conda env (`conda run -n tabeeby-agent ...`).
+See `src/.env.example` for every setting (budget, skills, MCP, Telegram secret, sessions).
 
 ---
 
 ## 🗄️ Offline Data Ingestion & Indexing (Separate Process)
 
-> [!NOTE]
-> **Data ingestion runs as an isolated, standalone process.** It embeds and populates the `vezeeta_doctors` collection in Qdrant before launching the API server, or when refreshing doctor records.
+> [!WARNING]
+> The vectors in Qdrant **must** be produced by the same embedding model the app queries with.
+> Check it any time with `make check-vectors` (mean cosine should be ~1.0).
 
-Run the ingestion script from the `src/` directory:
-
-### Option 1: Using `make`
 ```bash
-# Full ingestion with collection reset (recreates 'vezeeta_doctors' collection)
-make ingest
-
-# Incremental ingestion (without resetting collection)
-make ingest_default
+make ingest            # full rebuild (drops and recreates the collection)
+make ingest_default    # incremental
+python -m scripts.ingest_vezeeta --batch-size 64 --reset --verbose
 ```
 
-### Option 2: Using `uv run` / Python Module
-```bash
-# Full ingestion with collection reset (recommended for initial setup)
-uv run python -m scripts.ingest_vezeeta --batch-size 64 --reset
-
-# Incremental ingestion
-uv run python -m scripts.ingest_vezeeta --batch-size 64
-
-# Run with verbose / debug logging
-uv run python -m scripts.ingest_vezeeta --verbose
-```
-
-### Ingestion CLI Arguments Reference
-| Argument | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `--batch-size` | `int` | `64` | Number of doctor records per embedding and insertion batch. |
-| `--reset` | `flag` | `False` | Drops and recreates the `vezeeta_doctors` collection before ingesting. |
-| `--verbose` | `flag` | `False` | Enables detailed `DEBUG`-level logging. |
+| Argument | Default | Description |
+| :--- | :--- | :--- |
+| `--batch-size` | `64` | Records per embedding and insertion batch. |
+| `--reset` | `False` | Drops and recreates the collection before ingesting. |
+| `--verbose` | `False` | `DEBUG` logging. |
 
 ---
 
-## 🖥️ Running the Application
+## 📡 API
 
-### 1. Launch the FastAPI Server
-
-From the `src/` directory:
+| Method | Path | Purpose |
+| :--- | :--- | :--- |
+| `POST` | `/chat` | Ask the agent. Optional `session_id` (server remembers the chat) and `include_trace` |
+| `DELETE` | `/chat/{session_id}` | Forget a session |
+| `POST` | `/telegram/webhook` | Telegram updates (secret-token protected) |
+| `*` | `/mcp/` | Tabeeby MCP server (streamable HTTP, `Authorization: Bearer $MCP_API_KEY`) |
+| `GET` | `/health` | LLM, Qdrant, skills, MCP, Telegram status |
+| `GET` | `/skills`, `/skills/{name}` | Skill menu / one skill's instructions |
+| `GET` | `/tools` | Tools, per-message budget and verifiers |
 
 ```bash
-# Using Make
-make app
-
-# Or using Uvicorn directly
-uv run uvicorn app:app --host 0.0.0.0 --port 8000 --reload
-```
-
-* **Local Swagger Docs**: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
-* **Live Production Swagger Docs**: [https://tabeeby-agent.fastapicloud.dev/docs](https://tabeeby-agent.fastapicloud.dev/docs)
-* **Health Check**: `GET http://127.0.0.1:8000/` or `GET https://tabeeby-agent.fastapicloud.dev/`
-
----
-
-## 📡 API Usage & Examples
-
-### 🔍 Chat Endpoint (`POST /chat`)
-
-You can test either the **live deployed endpoint** or your **local instance**:
-
-#### Live Cloud Endpoint:
-```bash
-curl -X 'POST' \
-  'https://tabeeby-agent.fastapicloud.dev/chat' \
-  -H 'Content-Type: application/json' \
-  -d '{
-  "prompt": "عايز دكتور نساء وتوليد شاطر في حدائق القبة وسعره معقول",
-  "chat_history": [],
-  "total_cost": 0
+curl -X POST http://127.0.0.1:8000/chat -H 'Content-Type: application/json' -d '{
+  "prompt": "ضرسي بيوجعني جامد وانا في المعادي، ميزانيتي 400",
+  "session_id": "demo-1",
+  "include_trace": true
 }'
 ```
 
-#### Local Endpoint:
-```bash
-curl -X 'POST' \
-  'http://127.0.0.1:8000/chat' \
-  -H 'Content-Type: application/json' \
-  -d '{
-  "prompt": "عايز دكتور نساء وتوليد شاطر في حدائق القبة وسعره معقول",
-  "chat_history": [],
-  "total_cost": 0
-}'
+The response contains `response`, `stop_reason` (e.g. `completed`, `verified after 1 refinement(s)`),
+`verified`, `emergency`, `total_cost` and — with `include_trace` — the tool calls, skills used,
+verification checks and budget usage.
+
+---
+
+## 🧠 Skills
+
+A tool is an appliance; a skill is a recipe. The agent always sees the skill **menu** (name +
+description), calls `load_skill(name)` for the body, and `read_skill_reference(skill, file)` for
+reference files the body points to. Add a skill by creating `src/skills/<name>/SKILL.md` — no Python.
+Check that the right skill fires with `make bench`.
+
+## 🔌 MCP
+
+**Tabeeby as a server** — tools `search_doctors`, `check_emergency`, `medical_web_search`,
+`list_specialties`, `list_areas`, `ask_tabeeby`; resources `tabeeby://emergency-numbers`,
+`tabeeby://skills`, `tabeeby://skills/{name}`; prompt `triage`.
+
+```jsonc
+// Claude Desktop: claude_desktop_config.json
+{ "mcpServers": { "tabeeby": {
+    "command": "/home/<you>/miniconda3/envs/tabeeby-agent/bin/python",
+    "args": ["/path/to/Tabeeby-Agent/src/mcp_server/__main__.py"] } } }
 ```
 
-#### Sample Response:
-```json
-{
-  "signal": "llm_generate_success",
-  "response": "أهلاً بك! بالنسبة لحالتك، يُفضل المتابعة مع طبيب متخصص في **أمراض النساء والتوليد وعلاج العقم**.\n\nإليك أفضل الأطباء المتاحين في منطقة **حدائق القبة**:\n\n1. **د. يوسف صبحي** (استشاري أمراض النساء والتوليد وعلاج العقم)\n   - 📍 **العيادة**: حدائق القبة\n   - 💰 **سعر الكشف**: 300 جنيه مصري\n   - ⭐ **التقييم**: ★ 4.9 (85 تقييم)\n   - 🔗 **رابط الحجز**: [اضغط هنا للحجز على فيزيتا](https://www.vezeeta.com/ar/dr/doctor-yousef-sobhy)\n\n### 💡 نصائح أولية:\n- يُرجى إحضار نتائج الفحوصات والتحاليل السابقة عند الزيارة.\n\n*ملاحظة: هذه التوصيات للمساعدة والتوجيه ولا تُغني عن الفحص الطبي المباشر.*"
-}
+Remote clients connect to `https://<your-app>.fastapicloud.dev/mcp/` with the bearer key.
+
+**Tabeeby as a client** — set `MCP_SERVERS` (JSON) and the agent borrows those tools as
+`<server>__<tool>`; a server that fails to start is skipped, never fatal.
+
+## 🔁 Reliable loop & 📏 evaluation
+
+Every patient message runs inside a **budget** (default 8 steps, 90 s, 12 tool calls, optional USD cap).
+Tools are refused on the last step / last 25% of the time so the model always writes an answer;
+a tool that fails twice is disabled and duplicate calls are skipped. Every final answer passes **code
+verifiers** — grounded Vezeeta links, booking links present, emergency number for red flags, answer
+language — and failures are fed back for a refinement; if the budget ends first a deterministic repair
+removes unverified links and prepends the emergency banner.
+
+```bash
+make test     # offline unit/integration tests (fake LLM)
+make eval     # live: real LLM + Qdrant, 11 cases scored by code, JSON report in evals/reports/
+make bench    # live: did the right skill fire?
 ```
 
 ---
 
-## 🤖 Telegram Bot Integration
+## 🤖 Telegram Bot
 
-Tabeeby seamlessly integrates with Telegram for on-the-go patient accessibility:
+Commands: `/start`, `/help`, `/reset`, `/emergency`, `/skills`. Long answers are split under
+Telegram's 4096-character limit and Markdown is converted to Telegram HTML.
 
-1. Create a bot using [@BotFather](https://t.me/BotFather) on Telegram and obtain your `TELEGRAM_BOT_TOKEN`.
-2. Deploy the app (or expose your local port with Cloudflare Tunnels/ngrok) and set `TELEGRAM_WEBHOOK_URL` in `.env`.
-3. On startup, FastAPI automatically registers the webhook with Telegram.
-4. **Commands Supported**:
-   - `/start` — Welcome message and session initialization.
-   - `/reset` — Clears conversation history and restarts context.
-5. Try the live bot directly on Telegram: [**@tabeeby_bot**](https://t.me/tabeeby_bot).
+* **Local** (no public URL): `make telegram` — long polling; removes the webhook while running.
+* **Production**: set `TELEGRAM_WEBHOOK_URL=https://<your-app>.fastapicloud.dev/telegram/webhook`
+  and `TELEGRAM_WEBHOOK_SECRET`; the app registers the webhook (with the secret) on startup.
+
+## ☁️ Deploy to FastAPI Cloud
+
+```bash
+cd src && conda activate tabeeby-agent
+fastapi login
+make lock          # only if you changed pyproject.toml
+fastapi deploy     # first deploy creates/links the app (entrypoint: app:app from pyproject)
+make cloud-env     # pushes .env to FastAPI Cloud (keys/tokens as secrets)
+fastapi deploy     # redeploy so the new env vars are used
+```
 
 ---
 

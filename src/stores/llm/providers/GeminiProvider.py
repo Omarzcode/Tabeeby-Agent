@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 from ..LLMEnums import GeminiEnums, OllamaEnums
 from ..LLMInterface import LLMInterface
+from ..retry import with_retries
 
 try:
     from google import genai
@@ -158,6 +159,28 @@ class GeminiProvider(LLMInterface):
             usage=usage_obj,
             raw_response=raw_res,
         )
+
+    @staticmethod
+    def _convert_tools(tools: Sequence[Any]) -> List[Any]:
+        """Python callables pass through (the SDK reads their signature); JSON
+        schemas — e.g. tools borrowed from MCP servers — become FunctionDeclarations."""
+        callables: List[Any] = []
+        declarations: List[Any] = []
+        for tool in tools:
+            if isinstance(tool, dict):
+                spec = tool.get("function", tool)
+                declarations.append(
+                    types.FunctionDeclaration(
+                        name=spec["name"],
+                        description=spec.get("description", ""),
+                        parameters_json_schema=spec.get("parameters") or {"type": "object", "properties": {}},
+                    )
+                )
+            else:
+                callables.append(tool)
+        if declarations:
+            callables.append(types.Tool(function_declarations=declarations))
+        return callables
 
     def generate_response(
         self,
@@ -332,7 +355,7 @@ class GeminiProvider(LLMInterface):
             config_params["system_instruction"] = system_instruction
 
         if tools:
-            config_params["tools"] = list(tools)
+            config_params["tools"] = self._convert_tools(tools)
             config_params["automatic_function_calling"] = (
                 types.AutomaticFunctionCallingConfig(disable=True)
             )
@@ -340,11 +363,11 @@ class GeminiProvider(LLMInterface):
         config = types.GenerateContentConfig(**config_params)
 
         try:
-            raw_res = self.client.models.generate_content(
+            raw_res = with_retries(lambda: self.client.models.generate_content(
                 model=self.generation_model_id,
                 contents=contents if contents else (prompt or ""),
                 config=config,
-            )
+            ), label="Gemini generate")
 
             return self._build_response(raw_res)
 
@@ -374,11 +397,11 @@ class GeminiProvider(LLMInterface):
 
             config = types.EmbedContentConfig(**config_kwargs) if config_kwargs else None
 
-            response = self.client.models.embed_content(
+            response = with_retries(lambda: self.client.models.embed_content(
                 model=self.embedding_model_id,
                 contents=str(text).strip(),
                 config=config,
-            )
+            ), label="Gemini embed")
 
             if not response or not response.embeddings or len(response.embeddings) == 0:
                 self.logger.error("Error while embedding text with Gemini: empty response")

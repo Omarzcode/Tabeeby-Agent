@@ -6,6 +6,7 @@ class LLMEnums(Enum):
     GEMINI = "GEMINI"
     GEMINIE = "GEMINIE"
     OPENAI="OPENAI"
+    GROQ = "GROQ"
 
 class OllamaEnums(Enum):
     SYSTEM = "system"

@@ -1,0 +1,16 @@
+# Conda environment for local development.
+#   conda env create -f environment.yml      (first time)
+#   conda env update -f environment.yml --prune
+#   conda activate tabeeby-agent
+# FastAPI Cloud does NOT use this file: it installs from pyproject.toml + uv.lock.
+name: tabeeby-agent
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - -e .
+      - pytest>=8.0
+      - ipykernel>=7.3.0
+      - uv>=0.12
