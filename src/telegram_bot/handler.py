@@ -11,6 +11,7 @@ from telegram.constants import ChatAction, ParseMode
 from telegram.error import BadRequest
 
 from agent.safety import EMERGENCY_NUMBERS
+from helpers.usage_store import usage_event
 from telegram_bot.formatting import markdown_to_telegram_html, split_message
 
 logger = logging.getLogger(__name__)
@@ -46,11 +47,12 @@ BOT_COMMANDS = [
 
 
 class TelegramChatHandler:
-    def __init__(self, bot: Bot, agent: Any, sessions: Any, skills: Any = None):
+    def __init__(self, bot: Bot, agent: Any, sessions: Any, skills: Any = None, usage: Any = None):
         self.bot = bot
         self.agent = agent
         self.sessions = sessions
         self.skills = skills
+        self.usage = usage
         self._locks: Dict[int, asyncio.Lock] = {}
 
     def _lock(self, chat_id: int) -> asyncio.Lock:
@@ -144,6 +146,14 @@ class TelegramChatHandler:
                     stop.set()
                     await typing
                 await self.send(chat_id, result.answer)
+                if self.usage is not None:
+                    user = getattr(message, "from_user", None)
+                    name = " ".join(filter(None, [getattr(user, "first_name", ""), getattr(user, "last_name", "")]))
+                    event = usage_event(
+                        result, channel="telegram", user_key=f"tg:{getattr(user, 'id', chat_id)}",
+                        user_name=name, username=getattr(user, "username", "") or "", message_chars=len(text),
+                    )
+                    await asyncio.to_thread(self.usage.record, event)
         except Exception:
             logger.exception("Error handling Telegram update")
             try:

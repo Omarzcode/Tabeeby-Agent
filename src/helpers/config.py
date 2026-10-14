@@ -61,6 +61,15 @@ class Settings(BaseSettings):
     AGENT_VERIFY: bool = True
     INPUT_TOKEN_COST_USD: float = 0.0000001
     OUTPUT_TOKEN_COST_USD: float = 0.0000004
+    # Extra/override prices by model_id, USD per 1M tokens: {"model": [input, cached_input, output]}
+    MODEL_PRICES_JSON: Optional[str] = None
+
+    # ── Usage & cost tracking ───────────────────────────────────
+    USAGE_TRACKING_ENABLED: bool = True
+    USAGE_COLLECTION_NAME: str = "usage_events"
+    USAGE_TIMEZONE: str = "Africa/Cairo"
+    # Required to open /admin/usage. Without it the dashboard stays locked.
+    ADMIN_API_KEY: Optional[str] = None
 
     # ── Skills ──────────────────────────────────────────────────
     SKILLS_ENABLED: bool = True
@@ -73,6 +82,17 @@ class Settings(BaseSettings):
     # JSON object of external MCP servers whose tools the agent may borrow, e.g.
     # {"fetch": {"command": "uvx", "args": ["mcp-server-fetch"]}}
     MCP_SERVERS: Optional[str] = None
+
+    # ── Public /chat API (web frontends) ────────────────────────
+    # Comma-separated origins allowed to call the API from a browser, e.g.
+    # "https://tabeeby.app,http://localhost:5173". "*" allows any site.
+    CORS_ALLOW_ORIGINS: str = "*"
+    # Per visitor (IP address): at most this many messages per window. 0 disables.
+    CHAT_RATE_LIMIT_MESSAGES: int = 20
+    CHAT_RATE_LIMIT_WINDOW_SECONDS: int = 600
+    # How many proxies append to X-Forwarded-For in front of the app. FastAPI Cloud
+    # (checked 2026-10-14): Cloudflare + 2 internal hops = 3. 0 = trust the socket address.
+    TRUSTED_PROXY_HOPS: int = 3
 
     # ── Conversations ───────────────────────────────────────────
     SESSION_MAX_TURNS: int = 10

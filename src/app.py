@@ -14,13 +14,17 @@ from contextlib import asynccontextmanager
 from typing import Callable, Optional
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 from telegram import Bot
 
 from helpers.bootstrap import Services, build_services
 from helpers.config import Settings, get_settings
+from helpers.rate_limit import RateLimiter
 from helpers.session_store import SessionStore
+from helpers.usage_store import UsageStore
 from mcp_server.server import ServiceContainer, build_mcp_server
+from routes.admin import router as admin_router
 from routes.chat import router as chat_router
 from routes.info import router as info_router
 from routes.telegram import router as telegram_router
@@ -56,7 +60,9 @@ async def _setup_telegram(app: FastAPI, services: Services) -> None:
         return
     bot = Bot(token=config.TELEGRAM_BOT_TOKEN)
     app.state.tg_bot = bot
-    app.state.tg_handler = TelegramChatHandler(bot, services.agent, app.state.sessions, services.skills)
+    app.state.tg_handler = TelegramChatHandler(
+        bot, services.agent, app.state.sessions, services.skills, usage=app.state.usage,
+    )
     try:
         await bot.set_my_commands(BOT_COMMANDS)
         if config.TELEGRAM_WEBHOOK_URL:
@@ -101,6 +107,14 @@ def create_app(
         app.state.sessions = SessionStore(
             max_turns=services.config.SESSION_MAX_TURNS, ttl_seconds=services.config.SESSION_TTL_SECONDS,
         )
+        app.state.chat_limiter = RateLimiter(
+            services.config.CHAT_RATE_LIMIT_MESSAGES, services.config.CHAT_RATE_LIMIT_WINDOW_SECONDS,
+        )
+        app.state.usage = None
+        if services.config.USAGE_TRACKING_ENABLED:
+            app.state.usage = UsageStore(
+                getattr(services.vector_db, "client", None), collection=services.config.USAGE_COLLECTION_NAME,
+            )
         container.doctor_tools = services.doctor_tools
         container.skills = services.skills
         container.agent = services.agent
@@ -122,9 +136,17 @@ def create_app(
         description="AI medical navigator for Egypt: triage, Vezeeta doctor search, skills, MCP and self-verification.",
         lifespan=lifespan,
     )
+    origins = [o.strip() for o in (config.CORS_ALLOW_ORIGINS or "").split(",") if o.strip()]
+    if origins:
+        # Lets browser frontends on other sites call /chat. No cookies are used, so no credentials.
+        app.add_middleware(
+            CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+            allow_headers=["Content-Type", "Authorization"], expose_headers=["Retry-After"], max_age=600,
+        )
     app.include_router(chat_router)
     app.include_router(telegram_router)
     app.include_router(info_router)
+    app.include_router(admin_router)
     if mcp_http is not None:
         app.mount("/mcp", BearerAuth(mcp_http, config.MCP_API_KEY))
     app.state.mcp_server = mcp

@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<title>Tabeeby Usage</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Arabic:wght@400;600&display=swap">
+<style>
+/* Layout: control-room dashboard. Sticky top bar, KPI strip, one wide chart, then two-column tables. */
+:root{
+  --bg:#F3F6F6; --surface:#FFFFFF; --surface-2:#F7FAFA; --ink:#0F2624; --ink-2:#3F5653; --muted:#6B7F7C; --line:#DCE6E4;
+  --brand:#0E8074; --brand-strong:#0A5F57; --brand-soft:#DDF1EE; --bar:#14A090; --bar-hover:#0A6E64; --cached:#86D2C7;
+  --warn:#B45309; --warn-soft:#FDF0DC; --bad:#B42318; --bad-soft:#FCE6E3; --good:#2F7D3A; --good-soft:#E3F2E5;
+  --shadow:0 1px 2px rgba(10,40,36,.05), 0 8px 24px -12px rgba(10,40,36,.18);
+  --f-ui:"Onest","IBM Plex Sans Arabic",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-num:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#0A1413; --surface:#101E1C; --surface-2:#0D1918; --ink:#E4EFED; --ink-2:#B5C7C4; --muted:#839995; --line:#1F3532;
+  --brand:#3DC6B4; --brand-strong:#7FE0D3; --brand-soft:#123631; --bar:#2FB6A4; --bar-hover:#7FE0D3; --cached:#1F6E64;
+  --warn:#EBA552; --warn-soft:#33240F; --bad:#F2796D; --bad-soft:#3A1713; --good:#6FCB7B; --good-soft:#13301A;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.7); color-scheme:dark; }}
+:root[data-theme="dark"]{
+  --bg:#0A1413; --surface:#101E1C; --surface-2:#0D1918; --ink:#E4EFED; --ink-2:#B5C7C4; --muted:#839995; --line:#1F3532;
+  --brand:#3DC6B4; --brand-strong:#7FE0D3; --brand-soft:#123631; --bar:#2FB6A4; --bar-hover:#7FE0D3; --cached:#1F6E64;
+  --warn:#EBA552; --warn-soft:#33240F; --bad:#F2796D; --bad-soft:#3A1713; --good:#6FCB7B; --good-soft:#13301A;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.7); color-scheme:dark; }
+
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0; background:var(--bg); color:var(--ink); font-family:var(--f-ui); font-size:15px; line-height:1.5; -webkit-font-smoothing:antialiased}
+.num{font-family:var(--f-num); font-variant-numeric:tabular-nums}
+button,input{font:inherit; color:inherit}
+:focus-visible{outline:2px solid var(--brand); outline-offset:2px; border-radius:6px}
+.wrap{max-width:1240px; margin:0 auto; padding-inline:20px; padding-block:0 48px}
+@media (max-width:520px){ .wrap{padding-inline:16px} }
+
+/* top bar */
+header.top{position:sticky; top:env(safe-area-inset-top,0px); z-index:10; background:color-mix(in srgb, var(--bg) 86%, transparent); backdrop-filter:blur(10px); border-bottom:1px solid var(--line)}
+header.top .wrap{display:flex; align-items:center; gap:16px; flex-wrap:wrap; padding-block:14px}
+.brand{display:flex; align-items:center; gap:10px; margin-inline-end:auto}
+.logo{width:34px; height:34px; border-radius:10px; background:linear-gradient(140deg,var(--brand),var(--brand-strong)); display:grid; place-items:center; color:var(--surface); font-weight:700; box-shadow:var(--shadow)}
+.brand h1{font-size:17px; margin:0; font-weight:650; letter-spacing:-.01em}
+.brand small{display:block; color:var(--muted); font-size:12.5px; font-weight:400}
+.seg{display:inline-flex; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:3px; gap:2px}
+.seg button{border:0; background:transparent; padding:6px 12px; border-radius:7px; cursor:pointer; color:var(--ink-2); font-weight:500; font-size:13.5px}
+.seg button[aria-pressed="true"]{background:var(--brand-soft); color:var(--brand-strong)}
+.iconbtn{border:1px solid var(--line); background:var(--surface); border-radius:10px; padding:7px 12px; cursor:pointer; font-size:13.5px; color:var(--ink-2); display:inline-flex; gap:6px; align-items:center}
+.iconbtn:hover{border-color:var(--brand); color:var(--ink)}
+.stamp{font-size:12.5px; color:var(--muted)}
+.live{display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--good); margin-inline-end:6px; box-shadow:0 0 0 3px var(--good-soft)}
+
+/* login */
+.login{max-width:420px; margin:12vh auto 0; background:var(--surface); border:1px solid var(--line); border-radius:18px; padding:28px; box-shadow:var(--shadow)}
+.login h2{margin:0 0 6px; font-size:22px; letter-spacing:-.01em}
+.login p{margin:0 0 18px; color:var(--ink-2)}
+.login input{width:100%; padding:11px 13px; border-radius:10px; border:1px solid var(--line); background:var(--surface-2)}
+.login .row{display:flex; gap:10px; margin-top:12px}
+.primary{border:0; background:var(--brand); color:var(--surface); padding:11px 16px; border-radius:10px; font-weight:600; cursor:pointer; flex:1}
+.primary:hover{background:var(--brand-strong)}
+.err{color:var(--bad); font-size:13.5px; min-height:20px; margin-top:10px}
+.hint{font-size:12.5px; color:var(--muted); margin-top:6px}
+
+/* KPI strip */
+.kpis{display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:12px; margin-top:22px}
+@media (max-width:1100px){ .kpis{grid-template-columns:repeat(3,minmax(0,1fr))} }
+@media (max-width:560px){ .kpis{grid-template-columns:repeat(2,minmax(0,1fr))} }
+.kpi{background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:14px 16px; min-width:0}
+.kpi .lab{font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); font-weight:600}
+.kpi .val{font-size:26px; font-weight:600; letter-spacing:-.02em; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.kpi .sub{font-size:12.5px; color:var(--ink-2); margin-top:2px}
+.kpi.hero{background:linear-gradient(150deg,var(--brand),var(--brand-strong)); border-color:transparent; color:var(--surface)}
+.kpi.hero .lab, .kpi.hero .sub{color:color-mix(in srgb, var(--surface) 82%, transparent)}
+
+/* panels */
+.grid{display:grid; grid-template-columns:minmax(0,1.55fr) minmax(0,1fr); gap:16px; margin-top:16px}
+@media (max-width:980px){ .grid{grid-template-columns:minmax(0,1fr)} }
+.panel{background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:18px; min-width:0}
+.panel h3{margin:0; font-size:15.5px; font-weight:600}
+.panel .ph{display:flex; align-items:center; gap:12px; justify-content:space-between; flex-wrap:wrap; margin-bottom:12px}
+.panel .desc{font-size:13px; color:var(--muted); margin-top:2px}
+.full{margin-top:16px}
+
+/* chart */
+.chartbox{position:relative}
+.chartbox svg{display:block; width:100%; height:260px; overflow:visible}
+.tick{fill:var(--muted); font-size:11px; font-family:var(--f-num)}
+.gridline{stroke:var(--line); stroke-width:1}
+.bar{fill:var(--bar); transition:fill .12s}
+.bar.on{fill:var(--bar-hover)}
+.hit{fill:transparent; cursor:crosshair}
+.tip{position:absolute; pointer-events:none; background:var(--ink); color:var(--surface); border-radius:10px; padding:8px 11px; font-size:12.5px; line-height:1.45; box-shadow:var(--shadow); white-space:nowrap; transform:translate(-50%,-100%); margin-top:-10px}
+.tip b{font-family:var(--f-num); font-weight:500}
+details.dt{margin-top:10px; font-size:13px; color:var(--ink-2)}
+details.dt summary{cursor:pointer; color:var(--brand-strong)}
+
+/* user list */
+.search{border:1px solid var(--line); background:var(--surface-2); border-radius:9px; padding:7px 11px; font-size:13.5px; width:190px; max-width:100%}
+.ulist{display:flex; flex-direction:column; gap:4px; max-height:420px; overflow:auto; margin-inline:-6px; padding-inline:6px}
+.urow{display:grid; grid-template-columns:34px minmax(0,1fr) auto; gap:10px; align-items:center; padding:8px; border-radius:10px}
+.urow:hover{background:var(--surface-2)}
+.avatar{width:34px; height:34px; border-radius:50%; display:grid; place-items:center; font-weight:600; font-size:13px; background:var(--brand-soft); color:var(--brand-strong)}
+.uname{font-weight:550; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.umeta{font-size:12.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.share{height:5px; border-radius:3px; background:var(--line); margin-top:5px; overflow:hidden}
+.share > i{display:block; height:100%; background:var(--bar); border-radius:3px}
+.ucost{text-align:right; font-family:var(--f-num); font-weight:500}
+.ucost small{display:block; color:var(--muted); font-weight:400; font-size:11.5px}
+
+/* tables */
+.tw{overflow-x:auto}
+table{width:100%; border-collapse:collapse; font-size:13.5px}
+th{text-align:left; font-size:11.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); font-weight:600; padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap}
+td{padding:9px 10px; border-bottom:1px solid var(--line); white-space:nowrap}
+tr:last-child td{border-bottom:0}
+td.r, th.r{text-align:right}
+.chip{display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:550; padding:2px 9px; border-radius:99px; background:var(--brand-soft); color:var(--brand-strong)}
+.chip.warn{background:var(--warn-soft); color:var(--warn)}
+.chip.bad{background:var(--bad-soft); color:var(--bad)}
+.chip.good{background:var(--good-soft); color:var(--good)}
+.chip.ghost{background:var(--surface-2); color:var(--ink-2); border:1px solid var(--line)}
+.split{display:flex; height:8px; border-radius:4px; overflow:hidden; gap:2px; min-width:90px}
+.split i{display:block; height:100%}
+.empty{padding:36px 10px; text-align:center; color:var(--muted)}
+.banner{margin-top:16px; border-radius:12px; padding:11px 14px; font-size:13.5px; background:var(--warn-soft); color:var(--warn)}
+footer{color:var(--muted); font-size:12.5px; margin-top:22px}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="brand"><div class="logo">ط</div><div><h1>Tabeeby usage &amp; cost</h1><small id="subtitle">OpenAI spend per person</small></div></div>
+    <div class="seg" role="group" aria-label="Time range" id="range">
+      <button type="button" data-days="1">Today</button>
+      <button type="button" data-days="7">7 days</button>
+      <button type="button" data-days="30" aria-pressed="true">30 days</button>
+      <button type="button" data-days="90">90 days</button>
+    </div>
+    <span class="stamp" id="stamp"></span>
+    <button class="iconbtn" type="button" id="refresh" title="Refresh now">↻ Refresh</button>
+    <button class="iconbtn" type="button" id="theme" title="Switch theme">◐</button>
+    <button class="iconbtn" type="button" id="logout" hidden>Lock</button>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="login" id="login" hidden>
+    <h2>Admin access</h2>
+    <p>Enter the <span class="num">ADMIN_API_KEY</span> configured on the server. It stays in this browser only.</p>
+    <form id="loginForm">
+      <label for="key" class="hint">Admin key</label>
+      <input id="key" type="password" autocomplete="current-password" required>
+      <div class="row"><button class="primary" type="submit">Open dashboard</button></div>
+      <div class="err" id="loginErr" role="alert"></div>
+    </form>
+  </section>
+
+  <div id="app" hidden>
+    <div class="kpis">
+      <div class="kpi hero"><div class="lab">Spend · <span id="kRange">30 days</span></div><div class="val num" id="kCost">—</div><div class="sub" id="kCostSub"></div></div>
+      <div class="kpi"><div class="lab">Today</div><div class="val num" id="kToday">—</div><div class="sub" id="kTodaySub"></div></div>
+      <div class="kpi"><div class="lab">Messages</div><div class="val num" id="kMsgs">—</div><div class="sub" id="kMsgsSub"></div></div>
+      <div class="kpi"><div class="lab">People</div><div class="val num" id="kUsers">—</div><div class="sub" id="kUsersSub"></div></div>
+      <div class="kpi"><div class="lab">Avg per message</div><div class="val num" id="kAvg">—</div><div class="sub" id="kAvgSub"></div></div>
+      <div class="kpi"><div class="lab">Projected / 30 days</div><div class="val num" id="kProj">—</div><div class="sub">from the last 7 days' average</div></div>
+    </div>
+    <div class="banner" id="banner" hidden></div>
+
+    <div class="grid">
+      <section class="panel">
+        <div class="ph">
+          <div><h3 id="chartTitle">Daily spend</h3><div class="desc" id="chartDesc">US dollars per day, <span id="tzName"></span> time</div></div>
+          <div class="seg" role="group" aria-label="Chart measure" id="measure">
+            <button type="button" data-m="cost_usd" aria-pressed="true">Cost</button>
+            <button type="button" data-m="messages">Messages</button>
+          </div>
+        </div>
+        <div class="chartbox" id="chartbox"><svg id="chart" role="img" aria-label="Daily chart"></svg><div class="tip" id="tip" hidden></div></div>
+        <details class="dt"><summary>Show as table</summary><div class="tw"><table id="dailyTable"></table></div></details>
+      </section>
+
+      <section class="panel">
+        <div class="ph">
+          <div><h3>Top people by spend</h3><div class="desc">Telegram users and API sessions</div></div>
+          <input class="search" id="userSearch" type="search" placeholder="Search name or @user" aria-label="Search people">
+        </div>
+        <div class="ulist" id="users"></div>
+      </section>
+    </div>
+
+    <section class="panel full">
+      <div class="ph"><div><h3>Models</h3><div class="desc">Priced by each call's model_id. Bar shows tokens: <span style="color:var(--bar)">■</span> fresh input · <span style="color:var(--cached)">■</span> cached input · <span style="color:var(--warn)">■</span> output</div></div></div>
+      <div class="tw"><table id="models"></table></div>
+    </section>
+
+    <section class="panel full">
+      <div class="ph"><div><h3>Recent messages</h3><div class="desc">Latest 50 answered messages. Message text is never stored.</div></div><div id="stops" style="display:flex;gap:6px;flex-wrap:wrap"></div></div>
+      <div class="tw"><table id="recent"></table></div>
+    </section>
+    <footer id="foot"></footer>
+  </div>
+</main>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const store = { get(k){ try { return localStorage.getItem(k); } catch(e){ return null; } },
+                  set(k,v){ try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k,v); } catch(e){} } };
+  let key = store.get('tabeeby-admin-key');
+  let days = +(store.get('tabeeby-days') || 30);
+  let measure = 'cost_usd';
+  let data = null, timer = null;
+
+  const root = document.documentElement;
+  const savedTheme = store.get('tabeeby-theme'); if (savedTheme) root.setAttribute('data-theme', savedTheme);
+  $('theme').onclick = () => {
+    const cur = root.getAttribute('data-theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    const next = cur === 'dark' ? 'light' : 'dark'; root.setAttribute('data-theme', next); store.set('tabeeby-theme', next); if (data) drawChart();
+  };
+
+  const money = v => { v = +v || 0; if (v === 0) return '$0'; if (v < 0.01) return '$' + v.toFixed(4); if (v < 100) return '$' + v.toFixed(2); return '$' + Math.round(v).toLocaleString(); };
+  const compact = v => { v = +v || 0; if (v >= 1e6) return (v/1e6).toFixed(v >= 1e7 ? 0 : 1) + 'M'; if (v >= 1e3) return (v/1e3).toFixed(v >= 1e4 ? 0 : 1) + 'k'; return String(Math.round(v)); };
+  const when = ts => { const d = new Date(ts * 1000), diff = (Date.now() - d) / 1000;
+    if (diff < 60) return 'just now'; if (diff < 3600) return Math.floor(diff/60) + ' min ago'; if (diff < 86400) return Math.floor(diff/3600) + ' h ago';
+    return d.toLocaleDateString(undefined, { month:'short', day:'numeric' }) + ' ' + d.toLocaleTimeString(undefined, { hour:'2-digit', minute:'2-digit' }); };
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const who = u => u.user_name || (u.username ? '@' + u.username : (u.user_key || '').replace(/^api:/, 'API · '));
+  const initials = u => { const n = (u.user_name || u.username || u.user_key || '?').replace(/^(tg|api):/, '').trim(); const p = n.split(/\s+/); return ((p[0]||'?')[0] + (p[1] ? p[1][0] : '')).toUpperCase(); };
+
+  function setPressed(groupId, attr, val){ document.querySelectorAll(`#${groupId} button`).forEach(b => b.setAttribute('aria-pressed', String(b.dataset[attr] == val))); }
+  setPressed('range', 'days', days);
+
+  function showLogin(msg){ $('app').hidden = true; $('login').hidden = false; $('logout').hidden = true; $('loginErr').textContent = msg || ''; $('key').focus(); }
+
+  async function load(){
+    if (!key) return showLogin();
+    try {
+      const r = await fetch(`/admin/usage/data?days=${days}`, { headers: { Authorization: 'Bearer ' + key }, cache: 'no-store' });
+      const body = await r.json().catch(() => ({}));
+      if (r.status === 401) { key = null; store.set('tabeeby-admin-key', null); return showLogin('That key was not accepted.'); }
+      if (!r.ok) { return showLogin(body.error || `Server error ${r.status}.`); }
+      data = body; $('login').hidden = true; $('app').hidden = false; $('logout').hidden = false;
+      render();
+    } catch (e) { $('stamp').textContent = 'Offline: could not reach the server'; }
+  }
+
+  function render(){
+    const t = data.totals, label = days === 1 ? 'today' : `${days} days`;
+    $('kRange').textContent = label;
+    $('kCost').textContent = money(t.cost_usd);
+    $('kCostSub').textContent = `${compact(t.prompt_tokens + t.completion_tokens)} tokens`;
+    $('kToday').textContent = money(data.today.cost_usd);
+    $('kTodaySub').textContent = `${data.today.messages} messages · ${data.today.users} people`;
+    $('kMsgs').textContent = t.messages.toLocaleString();
+    $('kMsgsSub').textContent = `${t.emergencies} emergencies · median ${t.median_seconds.toFixed(1)} s`;
+    $('kUsers').textContent = t.users.toLocaleString();
+    $('kUsersSub').textContent = t.users ? `${(t.messages / t.users).toFixed(1)} messages each` : 'no one yet';
+    $('kAvg').textContent = money(t.avg_cost_usd);
+    $('kAvgSub').textContent = t.messages ? `${compact((t.prompt_tokens + t.completion_tokens) / t.messages)} tokens each` : '';
+    $('kProj').textContent = money(data.projected_30d_usd);
+    $('tzName').textContent = data.timezone.replace('_', ' ');
+    $('subtitle').textContent = `Model in use: ${data.model_in_use || 'unknown'} · storage: ${data.backend}`;
+    $('stamp').innerHTML = `<span class="live"></span>Updated ${new Date(data.generated_at * 1000).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})}`;
+    const unpriced = data.models.filter(m => !m.priced && m.model !== 'unknown');
+    $('banner').hidden = !(unpriced.length || data.backend === 'memory');
+    $('banner').textContent = [
+      unpriced.length ? `No listed price for ${unpriced.map(m => m.model).join(', ')}: costs use the fallback INPUT/OUTPUT_TOKEN_COST_USD. Add it with MODEL_PRICES_JSON.` : '',
+      data.backend === 'memory' ? 'Usage is stored in memory only (Qdrant unavailable): it resets when the app restarts.' : '',
+    ].filter(Boolean).join(' ');
+    drawChart(); drawUsers(); drawModels(); drawRecent();
+    $('foot').textContent = `Costs are computed from token counts × OpenAI list prices per model. Cross-check with the OpenAI billing page for invoiced amounts.`;
+  }
+
+  /* ---- daily chart: single series, one axis, hover tooltip ---- */
+  function drawChart(){
+    const svg = $('chart'), box = $('chartbox'), tip = $('tip');
+    const W = Math.max(320, box.clientWidth), H = 260, padL = 52, padR = 8, padT = 12, padB = 28;
+    const rows = data.daily, vals = rows.map(r => r[measure]);
+    const isCost = measure === 'cost_usd';
+    $('chartTitle').textContent = isCost ? 'Daily spend' : 'Daily messages';
+    const max = Math.max(...vals, 0);
+    const niceMax = (() => { if (max <= 0) return isCost ? 0.01 : 4; const p = Math.pow(10, Math.floor(Math.log10(max))); for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= max) return m * p; return 10 * p; })();
+    const y = v => padT + (H - padT - padB) * (1 - v / niceMax);
+    const n = rows.length, step = (W - padL - padR) / n, bw = Math.max(2, Math.min(28, step - 2));
+    let s = `<g>`;
+    for (let i = 0; i <= 4; i++) { const v = niceMax * i / 4, yy = y(v);
+      s += `<line class="gridline" x1="${padL}" x2="${W - padR}" y1="${yy}" y2="${yy}"/><text class="tick" x="${padL - 8}" y="${yy + 4}" text-anchor="end">${isCost ? money(v) : Math.round(v)}</text>`; }
+    const every = Math.ceil(n / Math.max(1, Math.floor((W - padL) / 64)));
+    rows.forEach((r, i) => {
+      const x = padL + i * step + (step - bw) / 2, v = r[measure], top = y(v), h = (H - padB) - top;
+      if (v > 0) { const rr = Math.min(4, bw / 2, h); s += `<path class="bar" data-i="${i}" d="M${x},${H - padB} V${top + rr} Q${x},${top} ${x + rr},${top} H${x + bw - rr} Q${x + bw},${top} ${x + bw},${top + rr} V${H - padB} Z"/>`; }
+      if ((n - 1 - i) % every === 0) { const d = new Date(r.date + 'T00:00:00'); s += `<text class="tick" x="${padL + i * step + step / 2}" y="${H - 8}" text-anchor="middle">${n <= 1 ? 'Today' : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</text>`; }
+      s += `<rect class="hit" data-i="${i}" x="${padL + i * step}" y="${padT}" width="${step}" height="${H - padT - padB}"/>`;
+    });
+    s += `<line x1="${padL}" x2="${W - padR}" y1="${H - padB}" y2="${H - padB}" stroke="var(--ink-2)" stroke-opacity=".35"/></g>`;
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.innerHTML = s;
+    svg.querySelectorAll('.hit').forEach(h => {
+      h.addEventListener('mouseenter', () => { const i = +h.dataset.i, r = rows[i];
+        svg.querySelectorAll('.bar').forEach(b => b.classList.toggle('on', +b.dataset.i === i));
+        const d = new Date(r.date + 'T00:00:00');
+        tip.innerHTML = `${d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}<br>Spend <b>${money(r.cost_usd)}</b> · Messages <b>${r.messages}</b><br>Tokens <b>${compact(r.prompt_tokens + r.completion_tokens)}</b>`;
+        tip.hidden = false; const bx = box.getBoundingClientRect(), hb = h.getBoundingClientRect();
+        tip.style.left = Math.min(Math.max(hb.left - bx.left + hb.width / 2, 90), bx.width - 90) + 'px';
+        tip.style.top = (y(r[measure]) / H * box.clientHeight) + 'px'; });
+      h.addEventListener('mouseleave', () => { tip.hidden = true; svg.querySelectorAll('.bar').forEach(b => b.classList.remove('on')); });
+    });
+    $('dailyTable').innerHTML = `<tr><th>Date</th><th class="r">Messages</th><th class="r">Tokens</th><th class="r">Cost</th></tr>` +
+      rows.slice().reverse().map(r => `<tr><td>${r.date}</td><td class="r num">${r.messages}</td><td class="r num">${compact(r.prompt_tokens + r.completion_tokens)}</td><td class="r num">${money(r.cost_usd)}</td></tr>`).join('');
+  }
+
+  function drawUsers(){
+    const q = $('userSearch').value.trim().toLowerCase();
+    const total = data.totals.cost_usd || 1;
+    const list = data.users.filter(u => !q || [u.user_name, u.username, u.user_key].join(' ').toLowerCase().includes(q));
+    $('users').innerHTML = list.length ? list.map(u => `
+      <div class="urow">
+        <div class="avatar" aria-hidden="true">${esc(initials(u))}</div>
+        <div style="min-width:0">
+          <div class="uname">${esc(who(u))} ${u.channel === 'api' ? '<span class="chip ghost">API</span>' : ''}</div>
+          <div class="umeta">${u.username ? '@' + esc(u.username) + ' · ' : ''}${u.messages} msg · ${compact(u.prompt_tokens + u.completion_tokens)} tok · ${when(u.last_seen)}</div>
+          <div class="share"><i style="width:${Math.max(2, u.cost_usd / total * 100).toFixed(1)}%"></i></div>
+        </div>
+        <div class="ucost">${money(u.cost_usd)}<small>${money(u.avg_cost_usd)}/msg</small></div>
+      </div>`).join('') : `<div class="empty">${data.users.length ? 'No one matches that search.' : 'No messages in this period yet. Send the bot a message and refresh.'}</div>`;
+  }
+
+  function drawModels(){
+    $('models').innerHTML = `<tr><th>Model</th><th class="r">Messages</th><th class="r">Input</th><th class="r">Cached</th><th class="r">Output</th><th>Token mix</th><th class="r">Cost</th></tr>` +
+      (data.models.length ? data.models.map(m => { const tot = m.prompt_tokens + m.completion_tokens || 1, fresh = m.prompt_tokens - m.cached_tokens;
+        return `<tr><td><span class="num">${esc(m.model)}</span> ${m.priced ? '' : '<span class="chip warn">unpriced</span>'}</td>
+          <td class="r num">${m.messages}</td><td class="r num">${compact(m.prompt_tokens)}</td><td class="r num">${compact(m.cached_tokens)}</td><td class="r num">${compact(m.completion_tokens)}</td>
+          <td><div class="split" title="fresh input ${compact(fresh)} · cached ${compact(m.cached_tokens)} · output ${compact(m.completion_tokens)}">
+            <i style="width:${fresh / tot * 100}%;background:var(--bar)"></i><i style="width:${m.cached_tokens / tot * 100}%;background:var(--cached)"></i><i style="width:${m.completion_tokens / tot * 100}%;background:var(--warn)"></i></div></td>
+          <td class="r num">${money(m.cost_usd)}</td></tr>`; }).join('') : `<tr><td colspan="7" class="empty">No model usage yet.</td></tr>`);
+  }
+
+  function drawRecent(){
+    const status = e => e.emergency ? '<span class="chip bad">● emergency</span>'
+      : (e.stop_reason || '').startsWith('repaired') ? '<span class="chip warn">repaired</span>'
+      : (e.stop_reason || '').startsWith('verified after') ? '<span class="chip">refined</span>'
+      : e.verified ? '<span class="chip good">✓ verified</span>' : `<span class="chip ghost">${esc((e.stop_reason || '').split(' ')[0] || '—')}</span>`;
+    $('recent').innerHTML = `<tr><th>When</th><th>Person</th><th>Model</th><th class="r">In / out tokens</th><th class="r">Time</th><th>Skills</th><th>Status</th><th class="r">Cost</th></tr>` +
+      (data.recent.length ? data.recent.map(e => `<tr>
+        <td>${when(e.ts)}</td><td>${esc(who(e))}</td><td class="num">${esc(e.model)}</td>
+        <td class="r num">${compact(e.prompt_tokens)} / ${compact(e.completion_tokens)}</td><td class="r num">${(+e.seconds).toFixed(1)} s</td>
+        <td>${(e.skills || []).map(s => `<span class="chip ghost">${esc(s)}</span>`).join(' ')}</td><td>${status(e)}</td><td class="r num">${money(e.cost_usd)}</td></tr>`).join('')
+      : `<tr><td colspan="8" class="empty">Nothing yet.</td></tr>`);
+    const label = k => k.startsWith('completed') ? 'first try' : k.startsWith('verified after') ? 'refined' : k.startsWith('repaired') ? 'repaired'
+      : k.includes('budget') ? 'budget hit' : k === 'llm_error' ? 'model error' : k;
+    const grouped = {}; Object.entries(data.stop_reasons).forEach(([k, v]) => { grouped[label(k)] = (grouped[label(k)] || 0) + v; });
+    const stops = Object.entries(grouped).sort((a, b) => b[1] - a[1]);
+    $('stops').innerHTML = stops.map(([k, v]) => `<span class="chip ghost">${esc(k)} <b class="num">${v}</b></span>`).join('');
+  }
+
+  $('loginForm').addEventListener('submit', e => { e.preventDefault(); key = $('key').value.trim(); store.set('tabeeby-admin-key', key); $('key').value = ''; load(); });
+  $('logout').onclick = () => { key = null; store.set('tabeeby-admin-key', null); data = null; showLogin(); };
+  $('refresh').onclick = load;
+  $('range').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; days = +b.dataset.days; store.set('tabeeby-days', days); setPressed('range', 'days', days); load(); });
+  $('measure').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; measure = b.dataset.m; setPressed('measure', 'm', measure); drawChart(); });
+  $('userSearch').addEventListener('input', () => data && drawUsers());
+  addEventListener('resize', () => data && drawChart());
+  load();
+  timer = setInterval(() => { if (key && !document.hidden) load(); }, 60000);
+})();
+</script>
+</body>
+</html>

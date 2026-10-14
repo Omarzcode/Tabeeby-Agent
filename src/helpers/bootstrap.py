@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from agent import Agent
 from helpers.config import Settings, get_settings
 from stores.llm.LLMProviderFactory import LLMProviderFactory
+from stores.llm.pricing import load_price_overrides
 from stores.mcp import McpRegistry
 from stores.vectordb.VectorDBProviderFactory import VectorDBProviderFactory
 from tools import DoctorTools, web_search
@@ -46,6 +47,7 @@ def build_services(config: Optional[Settings] = None, connect_mcp: bool = True) 
     load_dotenv()  # third-party SDKs (Tavily) read keys from os.environ
     config = config or get_settings()
     services = Services(config=config)
+    load_price_overrides(config.MODEL_PRICES_JSON)
 
     llm_factory = LLMProviderFactory(config=config)
     services.llm = llm_factory.create(config.GENERATION_BACKEND)

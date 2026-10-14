@@ -6,6 +6,7 @@ class ResponseSignal(Enum):
     LLM_GENERATE_SUCCESS = "llm_generate_success"
     LLM_CLIENT_NOT_INITIALIZED = "llm_client_not_initialized"
     LLM_GENERATE_ERROR = "llm_generate_error"
+    RATE_LIMITED = "rate_limited"
 
     # Embedding Signals
     EMBEDDING_SUCCESS = "embedding_success"

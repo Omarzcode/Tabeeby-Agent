@@ -28,6 +28,7 @@ from agent.safety import detect_language, detect_red_flags
 from agent.verifiers import (
     _VEZEETA_URL,
     DEFAULT_VERIFIERS,
+    _clean_url,
     VerificationContext,
     Verifier,
     repair_answer,
@@ -36,6 +37,7 @@ from agent.verifiers import (
 from prompts.prompt_templatet import VEZEETA_SYSTEM_PROMPT
 from stores.llm.LLMEnums import OllamaEnums
 from stores.llm.LLMInterface import LLMInterface
+from stores.llm.pricing import token_cost
 
 MAX_OBSERVATION_CHARS = 6000
 
@@ -91,6 +93,8 @@ class AgentResult:
     red_flags: Dict[str, Any] = field(default_factory=dict)
     language: str = "en"
     usage: Dict[str, Any] = field(default_factory=dict)
+    tokens: Dict[str, Any] = field(default_factory=dict)
+    doctors: List[Dict[str, Any]] = field(default_factory=list)
 
     def as_tuple(self) -> Tuple[str, List[Dict[str, str]], float]:
         """Backwards-compatible (answer, history, total_cost) shape."""
@@ -107,6 +111,7 @@ class AgentResult:
             "red_flags": self.red_flags,
             "language": self.language,
             "usage": self.usage,
+            "tokens": self.tokens,
             "run_cost_usd": round(self.run_cost, 6),
         }
 
@@ -212,10 +217,15 @@ class Agent:
             return self.client.construct_prompt(prompt=prompt, role=role, truncate=truncate)
         return {"role": role, "content": prompt}
 
-    def _calculate_response_cost(self, response: Any) -> float:
-        """USD cost of one LLM response from its token counts (Ollama, OpenAI or Gemini shapes)."""
+    @property
+    def model_id(self) -> Optional[str]:
+        return getattr(self.client, "generation_model_id", None)
+
+    @staticmethod
+    def _response_tokens(response: Any) -> Tuple[int, int, int]:
+        """(prompt, completion, cached) token counts from Ollama, OpenAI or Gemini response shapes."""
         if not response:
-            return 0.0
+            return 0, 0, 0
 
         def _get(obj: Any, name: str) -> Any:
             if isinstance(obj, dict):
@@ -224,14 +234,25 @@ class Agent:
 
         prompt_tokens = _get(response, "prompt_eval_count") or 0
         completion_tokens = _get(response, "eval_count") or 0
+        cached_tokens = 0
         usage = _get(response, "usage")
         if usage:
             prompt_tokens = _get(usage, "prompt_tokens") or prompt_tokens
             completion_tokens = _get(usage, "completion_tokens") or completion_tokens
+            cached_tokens = _get(usage, "cached_tokens") or 0
         try:
-            return (float(prompt_tokens) * self.input_token_cost) + (float(completion_tokens) * self.output_token_cost)
+            return int(prompt_tokens), int(completion_tokens), int(cached_tokens)
         except (TypeError, ValueError):
-            return 0.0
+            return 0, 0, 0
+
+    def _calculate_response_cost(self, response: Any) -> float:
+        """USD cost of one LLM response: the model's listed price if known, else the configured per-token prices."""
+        prompt_tokens, completion_tokens, cached_tokens = self._response_tokens(response)
+        return token_cost(
+            self.model_id, prompt_tokens, completion_tokens, cached_tokens,
+            fallback_input_per_token=self.input_token_cost,
+            fallback_output_per_token=self.output_token_cost,
+        )
 
     def _format_doctors_context(self, result: Any) -> str:
         """Format a search_doctors result into compact text for the model."""
@@ -351,6 +372,28 @@ class Agent:
                 clean.append({"role": role, "content": content})
         return clean
 
+    DOCTOR_CARD_FIELDS = ("name", "specialty", "subspecialties_text", "address", "fee",
+                          "reviews_count", "waiting_time_min", "profile_url")
+
+    @classmethod
+    def _collect_doctors(cls, result: Any) -> List[Dict[str, Any]]:
+        if isinstance(result, dict):
+            result = result.get("doctors", [])
+        if not isinstance(result, list):
+            return []
+        return [{k: d[k] for k in cls.DOCTOR_CARD_FIELDS if d.get(k) not in (None, "")}
+                for d in result if isinstance(d, dict) and d.get("profile_url")]
+
+    @staticmethod
+    def _cited_doctors(answer: str, found: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Doctors the final answer actually recommends, in the order it cites them."""
+        cited: List[Dict[str, Any]] = []
+        for url in _VEZEETA_URL.findall(answer or ""):
+            doc = found.get(_clean_url(url))
+            if doc and doc not in cited:
+                cited.append(doc)
+        return cited
+
     @staticmethod
     def _collect_urls(result: Any) -> List[str]:
         if isinstance(result, dict):
@@ -403,6 +446,7 @@ class Agent:
             if m["role"] == "assistant":
                 returned_urls.update(_VEZEETA_URL.findall(m["content"]))
         doctor_hits = 0
+        found_doctors: Dict[str, Dict[str, Any]] = {}
         skills_used: List[str] = []
         records: List[ToolCallRecord] = []
         refinements = 0
@@ -411,6 +455,7 @@ class Agent:
         verified = False
         stop_reason = ""
         run_cost = 0.0
+        tokens = {"prompt": 0, "completion": 0, "cached": 0, "llm_calls": 0}
         tools_for_provider = self._provider_tools() or None
         failures: Dict[str, int] = {}
         seen_calls: set = set()
@@ -425,6 +470,11 @@ class Agent:
             response = self.client.generate_response(prompt="", chat_history=messages, tools=tools_for_provider)
             step_cost = self._calculate_response_cost(response)
             run_cost += step_cost
+            p_tok, c_tok, cached_tok = self._response_tokens(response)
+            tokens["prompt"] += p_tok
+            tokens["completion"] += c_tok
+            tokens["cached"] += cached_tok
+            tokens["llm_calls"] += 1
             budget.spend(step_cost)
 
             message_obj = getattr(response, "message", None) if response else None
@@ -466,6 +516,8 @@ class Agent:
                             urls = self._collect_urls(raw)
                             returned_urls.update(urls)
                             doctor_hits += len(urls)
+                            for doc in self._collect_doctors(raw):
+                                found_doctors[_clean_url(doc["profile_url"])] = doc
                             observation = self._format_doctors_context(raw)
                         else:
                             observation = text
@@ -540,4 +592,6 @@ class Agent:
             red_flags=red_flags.as_dict() if red_flags.is_emergency else {"is_emergency": False},
             language=language,
             usage=budget.usage(),
+            tokens={**tokens, "model": self.model_id},
+            doctors=self._cited_doctors(answer, found_doctors),
         )

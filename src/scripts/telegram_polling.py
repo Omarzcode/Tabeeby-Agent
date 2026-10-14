@@ -12,6 +12,7 @@ import logging
 
 from helpers.bootstrap import build_services
 from helpers.session_store import SessionStore
+from helpers.usage_store import UsageStore
 from telegram import Bot
 from telegram_bot import TelegramChatHandler
 from telegram_bot.handler import BOT_COMMANDS
@@ -30,7 +31,10 @@ async def main() -> None:
 
     bot = Bot(token=config.TELEGRAM_BOT_TOKEN)
     sessions = SessionStore(max_turns=config.SESSION_MAX_TURNS, ttl_seconds=config.SESSION_TTL_SECONDS)
-    handler = TelegramChatHandler(bot, services.agent, sessions, services.skills)
+    usage = None
+    if services.config.USAGE_TRACKING_ENABLED:
+        usage = UsageStore(getattr(services.vector_db, "client", None), collection=services.config.USAGE_COLLECTION_NAME)
+    handler = TelegramChatHandler(bot, services.agent, sessions, services.skills, usage=usage)
     tasks = set()
 
     async with bot:

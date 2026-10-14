@@ -33,6 +33,7 @@ class OpenAIUsage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    cached_tokens: int = 0
 
 
 @dataclass
@@ -199,6 +200,7 @@ class OpenAIProvider(LLMInterface):
         prompt_tokens = 0
         completion_tokens = 0
         total_tokens = 0
+        cached_tokens = 0
 
         usage = getattr(raw_res, "usage", None)
         if usage:
@@ -207,11 +209,14 @@ class OpenAIProvider(LLMInterface):
             total_tokens = getattr(usage, "total_tokens", 0) or (
                 prompt_tokens + completion_tokens
             )
+            details = getattr(usage, "prompt_tokens_details", None)
+            cached_tokens = getattr(details, "cached_tokens", 0) or 0 if details else 0
 
         usage_obj = OpenAIUsage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
+            cached_tokens=cached_tokens,
         )
 
         message = OpenAIMessage(
