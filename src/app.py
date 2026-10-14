@@ -1,84 +1,139 @@
+"""Tabeeby Agent — FastAPI application.
+
+Endpoints
+    POST /chat               the agent (REST)
+    POST /telegram/webhook   the agent (Telegram)
+    /mcp                     Tabeeby as an MCP server (streamable HTTP)
+    GET  /health             component status
+    GET  /skills, /tools     what the agent can do
+"""
+
+import hmac
+import logging
 from contextlib import asynccontextmanager
-from dotenv import load_dotenv
+from typing import Callable, Optional
+
 from fastapi import FastAPI
+from starlette.responses import JSONResponse
 from telegram import Bot
 
-from helpers.config import get_settings
+from helpers.bootstrap import Services, build_services
+from helpers.config import Settings, get_settings
+from helpers.session_store import SessionStore
+from mcp_server.server import ServiceContainer, build_mcp_server
 from routes.chat import router as chat_router
+from routes.info import router as info_router
 from routes.telegram import router as telegram_router
-from stores.llm.LLMProviderFactory import LLMProviderFactory
-from stores.vectordb.VectorDBProviderFactory import VectorDBProviderFactory
-from agent import Agent
-from tools import DoctorTools,web_search
+from telegram_bot import TelegramChatHandler
+from telegram_bot.handler import BOT_COMMANDS
+from tools import web_search
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger("tabeeby")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    load_dotenv()
-    config = get_settings()
-    
-    llm_factory = LLMProviderFactory(config=config)
-    generation_client = llm_factory.create(config.GENERATION_BACKEND)
-    embedding_client = llm_factory.create(config.EMBEDDING_BACKEND)
+class BearerAuth:
+    """Tiny ASGI guard: require `Authorization: Bearer <key>` on the MCP endpoint."""
 
-    generation_client.set_generation_model(config.GENERATION_MODEL_ID)
-    embedding_client.set_embedding_model(
-        model_id=config.EMBEDDING_MODEL_ID,
-        embedding_size=config.EMBEDDING_MODEL_SIZE
+    def __init__(self, app, api_key: Optional[str]):
+        self.app = app
+        self.api_key = api_key
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and self.api_key:
+            headers = dict(scope.get("headers") or [])
+            given = headers.get(b"authorization", b"").decode()
+            if not hmac.compare_digest(given, f"Bearer {self.api_key}"):
+                response = JSONResponse({"error": "unauthorized"}, status_code=401)
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+async def _setup_telegram(app: FastAPI, services: Services) -> None:
+    config = services.config
+    if not config.TELEGRAM_BOT_TOKEN or services.agent is None:
+        return
+    bot = Bot(token=config.TELEGRAM_BOT_TOKEN)
+    app.state.tg_bot = bot
+    app.state.tg_handler = TelegramChatHandler(bot, services.agent, app.state.sessions, services.skills)
+    try:
+        await bot.set_my_commands(BOT_COMMANDS)
+        if config.TELEGRAM_WEBHOOK_URL:
+            await bot.set_webhook(
+                url=config.TELEGRAM_WEBHOOK_URL.strip(),
+                secret_token=config.TELEGRAM_WEBHOOK_SECRET or None,
+                allowed_updates=["message", "edited_message"],
+            )
+            logger.info("Telegram webhook set to %s", config.TELEGRAM_WEBHOOK_URL.strip())
+    except Exception as e:  # Telegram being unreachable must not stop the API
+        logger.error("Telegram setup failed: %s", e)
+        services.errors["telegram"] = str(e)
+
+
+def create_app(
+    services_factory: Callable[[], Services] = build_services,
+    config: Optional[Settings] = None,
+) -> FastAPI:
+    config = config or get_settings()
+    container = ServiceContainer()
+    mcp = build_mcp_server(container) if config.MCP_SERVER_ENABLED else None
+    mcp_http = None
+    if mcp is not None:
+        from mcp.server.transport_security import TransportSecuritySettings
+
+        mcp_http = mcp.streamable_http_app(
+            streamable_http_path="/",
+            stateless_http=True,
+            json_response=True,
+            # Behind FastAPI Cloud's proxy the Host header is the public domain;
+            # access is protected by MCP_API_KEY instead.
+            transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+        )
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        services = services_factory()
+        app.state.services = services
+        app.state.config = services.config
+        app.state.agent = services.agent
+        app.state.skills = services.skills
+        app.state.sessions = SessionStore(
+            max_turns=services.config.SESSION_MAX_TURNS, ttl_seconds=services.config.SESSION_TTL_SECONDS,
+        )
+        container.doctor_tools = services.doctor_tools
+        container.skills = services.skills
+        container.agent = services.agent
+        container.web_search = web_search if services.config.TAVILY_API_KEY else None
+
+        await _setup_telegram(app, services)
+
+        if mcp is not None:
+            async with mcp.session_manager.run():
+                yield
+        else:
+            yield
+
+        services.close()
+
+    app = FastAPI(
+        title="Tabeeby Agent",
+        version="2.0.0",
+        description="AI medical navigator for Egypt: triage, Vezeeta doctor search, skills, MCP and self-verification.",
+        lifespan=lifespan,
     )
+    app.include_router(chat_router)
+    app.include_router(telegram_router)
+    app.include_router(info_router)
+    if mcp_http is not None:
+        app.mount("/mcp", BearerAuth(mcp_http, config.MCP_API_KEY))
+    app.state.mcp_server = mcp
 
-    vdb_factory = VectorDBProviderFactory(config=config)
-    vector_db_client = vdb_factory.create(config.VECTOR_DB_BACKEND)
-    if vector_db_client:
-        vector_db_client.connect()
+    @app.get("/")
+    async def root():
+        return {"message": "Server is running", "docs": "/docs", "health": "/health", "mcp": "/mcp/"}
 
-   
-
-    app.state.llm_client = generation_client
-    app.state.embedding_client = embedding_client
-    app.state.vector_db_client = vector_db_client
-
-    collection_name = getattr(config, "VECTOR_DB_COLLECTION_NAME", "vezeeta_doctors") or "vezeeta_doctors"
-    doctor_tool = DoctorTools(
-        embedding_client=embedding_client,
-        vectordb_client=vector_db_client,
-        collection_name=collection_name,
-    )
-
-    ALL_TOOLS = [doctor_tool.search_doctors,web_search]
-
-    app.state.agent = Agent(
-        client=generation_client,
-        tools=ALL_TOOLS,
-        max_iterations=8
-    )
-
-    tg_token=config.TELEGRAM_BOT_TOKEN
-    webhook_url=config.TELEGRAM_WEBHOOK_URL
-
-    if tg_token:
-        bot=Bot(token=tg_token)
-        app.state.tg_bot=bot
-        if webhook_url:
-            await bot.set_webhook(url=webhook_url)
-
-    yield
-
-    # Clean shutdown
-
-    if vector_db_client:
-        vector_db_client.disconnect()
+    return app
 
 
-app = FastAPI(
-    title="Tabeeby Agent",
-    lifespan=lifespan,
-)
-
-app.include_router(chat_router)
-app.include_router(telegram_router)
-
-
-@app.get("/")
-async def root():
-    return {"message": "Server is running"}
+app = create_app()

@@ -1,238 +1,283 @@
-"""Tabeeby Medical Agent Implementation.
+"""Tabeeby Medical Agent.
 
-Autonomous Agent implementing a bounded reasoning loop with tool-calling support,
-medical safety guardrails, and RAG prompt formatting for Vezeeta Doctor-Finder.
+A goal-seeking tool loop with four reliability layers on top of plain
+tool calling:
+
+1. Skills   — a menu of medical recipes the model loads on demand
+              (`load_skill` / `read_skill_reference`, progressive disclosure).
+2. MCP      — tools borrowed from external MCP servers sit next to our own
+              Python tools; the loop does not care where a tool lives.
+3. Budget   — steps, seconds, tool actions and USD are all capped
+              ("a loop without a budget is a bug").
+4. Verify   — every final answer is checked by code (grounded links,
+              emergency number, language, booking links). Failures are fed
+              back as specific feedback and the model refines its answer;
+              if the budget ends first, a deterministic repair is applied.
 """
 
 from __future__ import annotations
 
-import inspect
 import json
 import logging
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+import threading
+from dataclasses import asdict, dataclass, field
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-try:
-    from prompts.prompt_templatet import (
-        VEZEETA_SYSTEM_PROMPT,
-        PROMPT_TEMPLATE,
-        format_prompt,
-    )
-    from stores.llm.LLMEnums import OllamaEnums
-    from stores.llm.LLMInterface import LLMInterface
-    from stores.vectordb.VectorDBInterface import VectorDBInterface
-except ImportError:
-    from ..prompts.prompt_templatet import (
-        VEZEETA_SYSTEM_PROMPT,
-        PROMPT_TEMPLATE,
-        format_prompt,
-    )
-    from ..stores.llm.LLMEnums import OllamaEnums
-    from ..stores.llm.LLMInterface import LLMInterface
-    from ..stores.vectordb.VectorDBInterface import VectorDBInterface
+from agent.budget import Budget
+from agent.safety import detect_language, detect_red_flags
+from agent.verifiers import (
+    _VEZEETA_URL,
+    DEFAULT_VERIFIERS,
+    VerificationContext,
+    Verifier,
+    repair_answer,
+    verify_answer,
+)
+from prompts.prompt_templatet import VEZEETA_SYSTEM_PROMPT
+from stores.llm.LLMEnums import OllamaEnums
+from stores.llm.LLMInterface import LLMInterface
+
+MAX_OBSERVATION_CHARS = 6000
+
+VERIFIER_FEEDBACK_TEMPLATE = (
+    "[Automatic quality check — this message is from the system, not the patient]\n"
+    "Your previous answer failed these checks:\n{feedback}\n"
+    "Rewrite the COMPLETE answer for the patient, fixing every point. "
+    "Do not mention this check."
+)
+
+TOOL_DISABLED_OBSERVATION = (
+    "Not executed: '{name}' has failed {n} times in this conversation turn and is now "
+    "disabled. Do not call it again. Answer with what you already have and tell the patient "
+    "honestly what you could not do (e.g. suggest searching vezeeta.com directly)."
+)
+
+DUPLICATE_CALL_OBSERVATION = (
+    "Not executed: you already called '{name}' with exactly these arguments; the result is "
+    "above. Use it, change the arguments, or write your final answer."
+)
+
+MAX_TOOL_FAILURES = 2
+
+BUDGET_SPENT_OBSERVATION = (
+    "Not executed: the tool budget for this message is spent. Write your final "
+    "answer now using only the information you already have."
+)
+
+
+@dataclass
+class ToolCallRecord:
+    name: str
+    arguments: Dict[str, Any]
+    source: str
+    executed: bool
+    ok: bool
+
+
+@dataclass
+class AgentResult:
+    """Everything one agent run produced — the answer plus the evidence."""
+
+    answer: str
+    history: List[Dict[str, str]]
+    total_cost: float
+    run_cost: float
+    stop_reason: str
+    verified: bool
+    refinements: int
+    checks: List[dict] = field(default_factory=list)
+    skills_used: List[str] = field(default_factory=list)
+    tool_calls: List[ToolCallRecord] = field(default_factory=list)
+    red_flags: Dict[str, Any] = field(default_factory=dict)
+    language: str = "en"
+    usage: Dict[str, Any] = field(default_factory=dict)
+
+    def as_tuple(self) -> Tuple[str, List[Dict[str, str]], float]:
+        """Backwards-compatible (answer, history, total_cost) shape."""
+        return self.answer, self.history, self.total_cost
+
+    def metadata(self) -> Dict[str, Any]:
+        return {
+            "stop_reason": self.stop_reason,
+            "verified": self.verified,
+            "refinements": self.refinements,
+            "checks": self.checks,
+            "skills_used": self.skills_used,
+            "tool_calls": [asdict(t) for t in self.tool_calls],
+            "red_flags": self.red_flags,
+            "language": self.language,
+            "usage": self.usage,
+            "run_cost_usd": round(self.run_cost, 6),
+        }
 
 
 class Agent:
-    """Production-ready Autonomous Medical Agent for Tabeeby (Vezeeta Doctor-Finder).
-
-    Executes a bounded reasoning loop (Send -> Check -> Append -> Run -> Append -> Repeat)
-    with tool-calling capabilities, RAG document grounding, and token cost tracking.
-    """
+    """Tabeeby's reasoning loop. Stateless per request, safe to share across threads."""
 
     def __init__(
         self,
         client: LLMInterface,
         tools: Optional[Sequence[Callable[..., Any]]] = None,
-        max_iterations: int = 10,
+        skills: Any = None,
+        mcp: Any = None,
         system_prompt: Optional[str] = None,
+        max_iterations: int = 8,
+        max_seconds: float = 90.0,
+        max_actions: Optional[int] = 12,
+        max_cost_usd: Optional[float] = None,
+        max_refinements: int = 2,
+        verifiers: Optional[List[Verifier]] = None,
         total_cost: float = 0.0,
         input_token_cost: float = 0.0000014,
         output_token_cost: float = 0.0000044,
     ):
-        """Initialize the Agent.
-
+        """
         Args:
             client: Generation LLM provider implementing LLMInterface.
-            tools: Optional sequence of tool callables or tool instances.
-            max_iterations: Maximum reasoning loop iterations before fallback.
-            system_prompt: Custom system prompt (defaults to VEZEETA_SYSTEM_PROMPT).
-            client_embedding: Optional embedding provider for tool injection.
-            client_vectorDB: Optional vector database provider for tool injection.
-            total_cost: Initial accumulated cost (defaults to 0.0).
-            input_token_cost: Cost per input token (default 0.0000014 = $1.40 / 1M tokens).
-            output_token_cost: Cost per output token (default 0.0000044 = $4.40 / 1M tokens).
+            tools: Python callables the model may call (name + docstring + type hints = schema).
+            skills: Optional SkillLibrary; adds the skill menu and load_skill/read_skill_reference.
+            mcp: Optional McpRegistry; its borrowed tools are offered next to ours.
+            max_iterations: Max LLM calls per message (step budget).
+            max_seconds: Wall-clock budget per message.
+            max_actions: Max tool calls executed per message (None = unlimited).
+            max_cost_usd: Optional USD budget per message.
+            max_refinements: How many times a failed verification may be retried.
+            verifiers: Code checks run on every final answer ([] disables verification).
+            input_token_cost / output_token_cost: USD per token, used for cost tracking.
         """
         self.client = client
-        self.max_iterations = max_iterations
         self.system_prompt = system_prompt or VEZEETA_SYSTEM_PROMPT
-        self.total_cost: float = float(total_cost)
-        self.input_token_cost: float = float(input_token_cost)
-        self.output_token_cost: float = float(output_token_cost)
+        self.skills = skills
+        self.mcp = mcp
+        self.max_iterations = max_iterations
+        self.max_seconds = max_seconds
+        self.max_actions = max_actions
+        self.max_cost_usd = max_cost_usd
+        self.max_refinements = max_refinements
+        self.verifiers = DEFAULT_VERIFIERS if verifiers is None else verifiers
+        self.total_cost = float(total_cost)
+        self.input_token_cost = float(input_token_cost)
+        self.output_token_cost = float(output_token_cost)
         self.logger = logging.getLogger(self.__class__.__name__)
+        self._cost_lock = threading.Lock()
 
         self.tools: List[Callable[..., Any]] = []
-        if tools:
-            for t in tools:
-                if hasattr(t, "search_doctors") and callable(getattr(t, "search_doctors")):
-                    self.tools.append(t.search_doctors)
-                elif callable(t):
-                    self.tools.append(t)
+        for t in tools or []:
+            if hasattr(t, "search_doctors") and callable(getattr(t, "search_doctors")):
+                self.tools.append(t.search_doctors)
+            elif callable(t):
+                self.tools.append(t)
+        if skills is not None:
+            self.tools.extend(skills.make_tools())
 
         self.tools_map: Dict[str, Callable[..., Any]] = {
             getattr(tool, "__name__", str(tool)): tool for tool in self.tools
         }
 
-    def _construct_message(
-        self, prompt: str, role: str, truncate: bool = False
-    ) -> Dict[str, Any]:
-        """Construct a chat message dictionary using provider conventions."""
+    # ── public helpers ───────────────────────────────────────────
+
+    def new_budget(self) -> Budget:
+        return Budget(
+            max_steps=self.max_iterations,
+            max_seconds=self.max_seconds,
+            max_actions=self.max_actions,
+            max_cost_usd=self.max_cost_usd,
+        )
+
+    def tool_names(self) -> List[str]:
+        names = list(self.tools_map)
+        if self.mcp is not None:
+            names += [s["function"]["name"] for s in self.mcp.schemas()]
+        return names
+
+    def build_system_prompt(self, base: Optional[str] = None) -> str:
+        prompt = base or self.system_prompt
+        if self.skills is not None:
+            prompt += self.skills.menu_prompt()
+        return prompt
+
+    def reset_total_cost(self, new_cost: float = 0.0) -> None:
+        self.total_cost = float(new_cost)
+
+    # ── internals ────────────────────────────────────────────────
+
+    def _provider_tools(self) -> List[Any]:
+        tools: List[Any] = list(self.tools)
+        if self.mcp is not None:
+            tools.extend(self.mcp.schemas())
+        return tools
+
+    def _construct_message(self, prompt: str, role: str, truncate: bool = False) -> Dict[str, Any]:
         if hasattr(self.client, "construct_prompt") and callable(self.client.construct_prompt):
             return self.client.construct_prompt(prompt=prompt, role=role, truncate=truncate)
-        return {
-            "role": role,
-            "content": prompt,
-        }
+        return {"role": role, "content": prompt}
 
     def _calculate_response_cost(self, response: Any) -> float:
-        """Calculate the cost of an LLM response based on evaluated token counts.
-
-        Extracts input and output tokens from Ollama response attributes
-        (prompt_eval_count, eval_count) or standard usage dictionaries.
-        """
+        """USD cost of one LLM response from its token counts (Ollama, OpenAI or Gemini shapes)."""
         if not response:
             return 0.0
 
-        prompt_tokens = 0
-        completion_tokens = 0
+        def _get(obj: Any, name: str) -> Any:
+            if isinstance(obj, dict):
+                return obj.get(name)
+            return getattr(obj, name, None)
 
-        # Direct attributes (Ollama ChatResponse object)
-        if hasattr(response, "prompt_eval_count") and response.prompt_eval_count is not None:
-            prompt_tokens = response.prompt_eval_count
-        elif isinstance(response, dict) and "prompt_eval_count" in response:
-            prompt_tokens = response.get("prompt_eval_count") or 0
-
-        if hasattr(response, "eval_count") and response.eval_count is not None:
-            completion_tokens = response.eval_count
-        elif isinstance(response, dict) and "eval_count" in response:
-            completion_tokens = response.get("eval_count") or 0
-
-        # Fallback to standard usage structure (OpenAI / Cloud APIs)
-        usage = getattr(response, "usage", None) or (
-            response.get("usage") if isinstance(response, dict) else None
-        )
+        prompt_tokens = _get(response, "prompt_eval_count") or 0
+        completion_tokens = _get(response, "eval_count") or 0
+        usage = _get(response, "usage")
         if usage:
-            if hasattr(usage, "prompt_tokens") and usage.prompt_tokens is not None:
-                prompt_tokens = usage.prompt_tokens or prompt_tokens
-            elif isinstance(usage, dict) and "prompt_tokens" in usage:
-                prompt_tokens = usage.get("prompt_tokens") or prompt_tokens
+            prompt_tokens = _get(usage, "prompt_tokens") or prompt_tokens
+            completion_tokens = _get(usage, "completion_tokens") or completion_tokens
+        try:
+            return (float(prompt_tokens) * self.input_token_cost) + (float(completion_tokens) * self.output_token_cost)
+        except (TypeError, ValueError):
+            return 0.0
 
-            if hasattr(usage, "completion_tokens") and usage.completion_tokens is not None:
-                completion_tokens = usage.completion_tokens or completion_tokens
-            elif isinstance(usage, dict) and "completion_tokens" in usage:
-                completion_tokens = usage.get("completion_tokens") or completion_tokens
-
-        cost = (prompt_tokens * self.input_token_cost) + (
-            completion_tokens * self.output_token_cost
-        )
-        return cost
-
-    def _format_doctors_context(self, doctors: Any) -> str:
-        """Format retrieved doctor records into structured context text for RAG."""
-        if isinstance(doctors, str):
+    def _format_doctors_context(self, result: Any) -> str:
+        """Format a search_doctors result into compact text for the model."""
+        if isinstance(result, str):
             try:
-                doctors = json.loads(doctors)
+                result = json.loads(result)
             except Exception:
-                return doctors
+                return result
 
-        if not isinstance(doctors, list) or len(doctors) == 0:
-            return "No matching doctors found for the specified search criteria."
+        notes: List[str] = []
+        doctors = result
+        if isinstance(result, dict):
+            if result.get("error"):
+                return f"Error: {result['error']}"
+            doctors = result.get("doctors", [])
+            notes = result.get("notes") or []
+            applied = {k: v for k, v in (result.get("filters_applied") or {}).items() if v is not None}
+            if applied:
+                notes = [f"Filters applied: {applied}"] + list(notes)
 
-        formatted_docs = []
+        if not isinstance(doctors, list) or not doctors:
+            return "\n".join(notes + ["No matching doctors found for the specified search criteria."])
+
+        formatted = []
         for idx, doc in enumerate(doctors, 1):
             if not isinstance(doc, dict):
-                formatted_docs.append(str(doc))
+                formatted.append(str(doc))
                 continue
-
             lines = [f"Doctor {idx}:"]
-            if doc.get("name"):
-                lines.append(f"  - Name: {doc['name']}")
-            if doc.get("specialty"):
-                lines.append(f"  - Specialty: {doc['specialty']}")
-            if doc.get("subspecialties_text"):
-                lines.append(f"  - Subspecialties: {doc['subspecialties_text']}")
-            if doc.get("address"):
-                lines.append(f"  - Clinic Location / Area: {doc['address']}")
-            if doc.get("fee") is not None:
-                lines.append(f"  - Consultation Fee: {doc['fee']} EGP")
-            if doc.get("reviews_count") is not None:
-                lines.append(f"  - Patient Reviews: {doc['reviews_count']} reviews")
-            if doc.get("waiting_time_min") is not None:
-                lines.append(f"  - Average Waiting Time: ~{doc['waiting_time_min']} mins")
-            if doc.get("profile_url"):
-                lines.append(f"  - Profile & Booking URL: {doc['profile_url']}")
-            formatted_docs.append("\n".join(lines))
+            labels = [
+                ("name", "Name"), ("specialty", "Specialty"), ("subspecialties_text", "Subspecialties"),
+                ("address", "Clinic Location / Area"), ("fee", "Consultation Fee (EGP)"),
+                ("reviews_count", "Patient Reviews"), ("waiting_time_min", "Average Waiting Time (min)"),
+                ("profile_url", "Profile & Booking URL"),
+            ]
+            for key, label in labels:
+                if doc.get(key) not in (None, ""):
+                    lines.append(f"  - {label}: {doc[key]}")
+            formatted.append("\n".join(lines))
+        return "\n".join(notes + [""]) + "\n\n".join(formatted) if notes else "\n\n".join(formatted)
 
-        return "\n\n".join(formatted_docs)
-
-    def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Tuple[Any, str]:
-        """Safely execute a tool by name with keyword arguments.
-
-        Returns:
-            Tuple of (raw_result, string_observation).
-        """
-        tool = self.tools_map.get(tool_name)
-        if not tool:
-            available = list(self.tools_map.keys())
-            error_msg = f"Error: Tool '{tool_name}' not found. Available tools: {available}"
-            self.logger.warning(error_msg)
-            return {"error": error_msg}, json.dumps({"error": error_msg})
-
-        try:
-            call_kwargs = dict(tool_args)
-            try:
-                sig = inspect.signature(tool)
-                if (
-                    "client_embedding" in sig.parameters
-                    and "client_embedding" not in call_kwargs
-                    and self.client_embedding
-                ):
-                    call_kwargs["client_embedding"] = self.client_embedding
-                if (
-                    "client_vectorDB" in sig.parameters
-                    and "client_vectorDB" not in call_kwargs
-                    and self.client_vectorDB
-                ):
-                    call_kwargs["client_vectorDB"] = self.client_vectorDB
-            except Exception as sig_err:
-                self.logger.debug(f"Signature inspection skipped for '{tool_name}': {sig_err}")
-
-            self.logger.info(f"Executing tool '{tool_name}' with arguments: {tool_args}")
-            raw_result = tool(**call_kwargs)
-
-            if isinstance(raw_result, str):
-                str_res = raw_result
-            elif isinstance(raw_result, (dict, list, int, float, bool)):
-                str_res = json.dumps(raw_result, ensure_ascii=False, default=str)
-            elif raw_result is None:
-                str_res = json.dumps({"status": "success", "result": None})
-            elif hasattr(raw_result, "model_dump"):
-                str_res = json.dumps(raw_result.model_dump(), ensure_ascii=False, default=str)
-            elif hasattr(raw_result, "dict"):
-                str_res = json.dumps(raw_result.dict(), ensure_ascii=False, default=str)
-            else:
-                str_res = str(raw_result)
-
-            return raw_result, str_res
-
-        except Exception as e:
-            error_msg = f"Error executing tool '{tool_name}': {str(e)}"
-            self.logger.error(error_msg, exc_info=True)
-            return {"error": error_msg}, json.dumps({"error": error_msg})
-
-    def _extract_tool_call_info(self, tool_call: Any) -> Tuple[str, Dict[str, Any]]:
-        """Safely extract function name and argument dictionary from a tool call object."""
+    @staticmethod
+    def _extract_tool_call_info(tool_call: Any) -> Tuple[str, Dict[str, Any]]:
+        """Safely extract (function name, argument dict) from any provider's tool call."""
         tool_name = ""
         raw_args: Any = {}
-
         if hasattr(tool_call, "function"):
             func = tool_call.function
             tool_name = getattr(func, "name", "")
@@ -250,23 +295,71 @@ class Agent:
             raw_args = getattr(tool_call, "arguments", {})
 
         if isinstance(raw_args, dict):
-            tool_args = raw_args
-        elif isinstance(raw_args, str):
+            return tool_name, dict(raw_args)
+        if isinstance(raw_args, str):
             try:
                 parsed = json.loads(raw_args)
-                tool_args = parsed if isinstance(parsed, dict) else {"input": parsed}
+                return tool_name, parsed if isinstance(parsed, dict) else {"input": parsed}
             except (json.JSONDecodeError, TypeError):
-                tool_args = {}
-        elif raw_args is None:
-            tool_args = {}
+                return tool_name, {}
+        if raw_args is None:
+            return tool_name, {}
+        try:
+            return tool_name, dict(raw_args)
+        except Exception:
+            return tool_name, {"input": raw_args}
+
+    def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Tuple[Any, str, str]:
+        """Run one tool. Returns (raw_result, observation_text, source)."""
+        if self.mcp is not None and self.mcp.owns(tool_name):
+            self.logger.info("MCP tool %s(%s)", tool_name, tool_args)
+            out = self.mcp.call(tool_name, tool_args)
+            return out, out, "mcp"
+
+        tool = self.tools_map.get(tool_name)
+        if not tool:
+            msg = f"Error: Tool '{tool_name}' not found. Available tools: {self.tool_names()}"
+            self.logger.warning(msg)
+            return {"error": msg}, msg, "unknown"
+
+        try:
+            self.logger.info("Tool %s(%s)", tool_name, tool_args)
+            raw = tool(**tool_args)
+        except Exception as e:  # failure is content: the loop must stay alive
+            msg = f"Error executing tool '{tool_name}': {e}"
+            self.logger.error(msg, exc_info=True)
+            return {"error": msg}, msg, "local"
+
+        if isinstance(raw, str):
+            text = raw
+        elif hasattr(raw, "model_dump"):
+            text = json.dumps(raw.model_dump(), ensure_ascii=False, default=str)
         else:
-            tool_args = {"input": raw_args}
+            text = json.dumps(raw, ensure_ascii=False, default=str)
+        return raw, text, "local"
 
-        return tool_name, tool_args
+    @staticmethod
+    def _sanitize_history(chat_history: Optional[List[Dict[str, Any]]]) -> List[Dict[str, str]]:
+        """Keep only plain user/assistant text turns (drop system, tool and tool-call entries)."""
+        clean: List[Dict[str, str]] = []
+        for msg in chat_history or []:
+            if not isinstance(msg, dict):
+                continue
+            role = msg.get("role")
+            content = msg.get("content")
+            if role in ("user", "assistant") and isinstance(content, str) and content.strip() and not msg.get("tool_calls"):
+                clean.append({"role": role, "content": content})
+        return clean
 
-    def reset_total_cost(self, new_cost: float = 0.0) -> None:
-        """Reset or set the accumulated total cost on the agent instance."""
-        self.total_cost = float(new_cost)
+    @staticmethod
+    def _collect_urls(result: Any) -> List[str]:
+        if isinstance(result, dict):
+            result = result.get("doctors", [])
+        if not isinstance(result, list):
+            return []
+        return [d["profile_url"] for d in result if isinstance(d, dict) and d.get("profile_url")]
+
+    # ── the loop ─────────────────────────────────────────────────
 
     def run(
         self,
@@ -274,150 +367,177 @@ class Agent:
         chat_history: Optional[List[Dict[str, Any]]] = None,
         system_prompt: Optional[str] = None,
         total_cost: Optional[float] = None,
-    ) -> Tuple[str, List[Dict[str, Any]], float]:
-        """Execute the bounded reasoning loop for a patient inquiry.
-
-        Workflow:
-        1. Context setup: system prompt -> prior conversation history -> patient prompt.
-        2. Bounded reasoning iterations:
-           - Send context to LLM with tool definitions.
-           - Calculate token cost from response and add to total cost.
-           - If no tool calls -> extract final text and finish.
-           - If tool calls -> execute tools, record tool observations, and format RAG context.
-        3. Repeat until final answer or max_iterations is reached.
+        budget: Optional[Budget] = None,
+    ) -> AgentResult:
+        """Answer one patient message.
 
         Args:
-            prompt: Patient's incoming query or symptom description.
-            chat_history: Prior conversation message history.
-            system_prompt: Optional system prompt override.
-            total_cost: Optional starting total cost (e.g. from previous runs). If omitted,
-                uses the agent instance's cumulative cost tracker.
-
-        Returns:
-            Tuple of (final_response_text, message_history, total_cost).
+            prompt: The patient's message.
+            chat_history: Prior turns as [{"role": "user"|"assistant", "content": str}].
+            system_prompt: Optional system prompt override (the skill menu is still appended).
+            total_cost: Starting cumulative cost for this conversation (USD).
+            budget: Optional Budget; defaults to the agent's configured limits.
         """
-        running_cost: float = (
-            float(total_cost) if total_cost is not None else self.total_cost
-        )
-        active_system_prompt = system_prompt or self.system_prompt
+        budget = budget or self.new_budget()
+        prompt = (prompt or "").strip()
+        history = self._sanitize_history(chat_history)
+        red_flags = detect_red_flags(prompt)
+        language = detect_language(prompt)
 
-        messages: List[Dict[str, Any]] = []
-
-        if active_system_prompt:
-            messages.append(
-                self._construct_message(
-                    prompt=active_system_prompt,
-                    role=OllamaEnums.SYSTEM.value,
-                    truncate=False,
-                )
+        system_text = self.build_system_prompt(system_prompt)
+        if red_flags.is_emergency:
+            system_text += (
+                "\n\n### SAFETY PRE-CHECK (automatic)\nThe latest patient message contains "
+                f"emergency red flags ({', '.join(red_flags.categories)}). Load the "
+                "`emergency-triage` skill if available, and START your answer by telling the "
+                "patient to call the ambulance on 123 or go to the nearest emergency room."
             )
 
-        if chat_history:
-            for msg in chat_history:
-                if (
-                    msg.get("role") == OllamaEnums.SYSTEM.value
-                    and messages
-                    and messages[0].get("role") == OllamaEnums.SYSTEM.value
-                ):
-                    messages[0] = dict(msg)
-                else:
-                    messages.append(dict(msg))
+        messages: List[Dict[str, Any]] = [self._construct_message(system_text, OllamaEnums.SYSTEM.value)]
+        messages.extend(dict(m) for m in history)
+        messages.append(self._construct_message(prompt, OllamaEnums.USER.value, truncate=True))
 
-        if prompt and prompt.strip():
-            messages.append(
-                self._construct_message(
-                    prompt=prompt.strip(),
-                    role=OllamaEnums.USER.value,
-                    truncate=True,
-                )
-            )
+        # URLs cited in earlier (already verified) answers count as grounded.
+        returned_urls = set()
+        for m in history:
+            if m["role"] == "assistant":
+                returned_urls.update(_VEZEETA_URL.findall(m["content"]))
+        doctor_hits = 0
+        skills_used: List[str] = []
+        records: List[ToolCallRecord] = []
+        refinements = 0
+        answer = ""
+        checks: List[dict] = []
+        verified = False
+        stop_reason = ""
+        run_cost = 0.0
+        tools_for_provider = self._provider_tools() or None
+        failures: Dict[str, int] = {}
+        seen_calls: set = set()
 
-        # Reasoning loop
-        for iteration in range(1, self.max_iterations + 1):
-            self.logger.debug(f"Reasoning loop iteration {iteration}/{self.max_iterations}")
+        while True:
+            hard_stop = budget.reason()
+            if hard_stop:
+                stop_reason = hard_stop
+                break
 
-            # Step 1: Query LLM
-            response = self.client.generate_response(
-                prompt=prompt,
-                chat_history=messages,
-                tools=self.tools if self.tools else None,
-            )
-
-            # Calculate cost of this LLM step
+            budget.tick()
+            response = self.client.generate_response(prompt="", chat_history=messages, tools=tools_for_provider)
             step_cost = self._calculate_response_cost(response)
-            running_cost += step_cost
-            self.total_cost += step_cost
+            run_cost += step_cost
+            budget.spend(step_cost)
 
-            if not response or not hasattr(response, "message") or response.message is None:
+            message_obj = getattr(response, "message", None) if response else None
+            if message_obj is None:
                 self.logger.error("LLM returned an empty or invalid response.")
-                fallback_error = (
-                    "I apologize, but I encountered an error communicating with the AI service. "
-                    "Please try again."
-                )
-                messages.append(
-                    self._construct_message(
-                        prompt=fallback_error,
-                        role=OllamaEnums.ASSISTANT.value,
-                        truncate=False,
-                    )
-                )
-                return fallback_error, messages, running_cost
+                stop_reason = "llm_error"
+                break
 
-            message_obj = response.message
-            tool_calls = getattr(message_obj, "tool_calls", None)
+            tool_calls = list(getattr(message_obj, "tool_calls", None) or [])
+            if tool_calls:
+                granted = budget.allow(len(tool_calls)) if budget.can_use_tools() else 0
+                assistant_entry = self._construct_message(getattr(message_obj, "content", "") or "", OllamaEnums.ASSISTANT.value)
+                assistant_entry["tool_calls"] = tool_calls
+                messages.append(assistant_entry)
 
-            # Step 2: Check for exit condition (no tool calls -> final response)
-            if not tool_calls:
-                final_content = getattr(message_obj, "content", "") or ""
-                messages.append(
-                    self._construct_message(
-                        prompt=final_content,
-                        role=OllamaEnums.ASSISTANT.value,
-                        truncate=False,
-                    )
-                )
-                return final_content, messages, running_cost
+                for idx, tool_call in enumerate(tool_calls):
+                    name, args = self._extract_tool_call_info(tool_call)
+                    signature = (name, json.dumps(args, sort_keys=True, default=str))
+                    if idx >= granted:
+                        records.append(ToolCallRecord(name, args, "dropped", executed=False, ok=False))
+                        observation = BUDGET_SPENT_OBSERVATION
+                    elif failures.get(name, 0) >= MAX_TOOL_FAILURES:
+                        # Stuck detection: a tool that keeps failing will not start working on try #3.
+                        records.append(ToolCallRecord(name, args, "disabled", executed=False, ok=False))
+                        observation = TOOL_DISABLED_OBSERVATION.format(name=name, n=failures[name])
+                    elif signature in seen_calls:
+                        records.append(ToolCallRecord(name, args, "duplicate", executed=False, ok=False))
+                        observation = DUPLICATE_CALL_OBSERVATION.format(name=name)
+                    else:
+                        seen_calls.add(signature)
+                        raw, text, source = self._execute_tool(name, args)
+                        ok = not (isinstance(raw, dict) and raw.get("error")) and not str(text).startswith("Error")
+                        records.append(ToolCallRecord(name, args, source, executed=True, ok=ok))
+                        if not ok:
+                            failures[name] = failures.get(name, 0) + 1
+                        if name == "load_skill" and args.get("name") and args["name"] not in skills_used:
+                            skills_used.append(str(args["name"]))
+                        if name == "search_doctors" or name.endswith("__search_doctors"):
+                            urls = self._collect_urls(raw)
+                            returned_urls.update(urls)
+                            doctor_hits += len(urls)
+                            observation = self._format_doctors_context(raw)
+                        else:
+                            observation = text
+                    tool_entry = self._construct_message(str(observation)[:MAX_OBSERVATION_CHARS], OllamaEnums.TOOL.value)
+                    tool_entry["name"] = name
+                    tool_id = getattr(tool_call, "id", None) or (tool_call.get("id") if isinstance(tool_call, dict) else None)
+                    if tool_id:
+                        tool_entry["tool_call_id"] = tool_id
+                    messages.append(tool_entry)
+                continue
 
-            # Step 3: Append assistant tool call message to history
-            assistant_entry = self._construct_message(
-                prompt=getattr(message_obj, "content", "") or "",
-                role=OllamaEnums.ASSISTANT.value,
-                truncate=False,
+            # A final answer: verify it with code before it reaches the patient.
+            answer = getattr(message_obj, "content", "") or ""
+            ctx = VerificationContext(
+                user_prompt=prompt, answer=answer, red_flags=red_flags, language=language,
+                returned_urls=returned_urls, doctor_search_hits=doctor_hits,
             )
-            assistant_entry["tool_calls"] = tool_calls
-            messages.append(assistant_entry)
+            report = verify_answer(ctx, self.verifiers)
+            checks = report.checks
+            if report.passed:
+                verified = True
+                stop_reason = "completed" if refinements == 0 else f"verified after {refinements} refinement(s)"
+                break
+            if refinements >= self.max_refinements or budget.exhausted():
+                stop_reason = "repaired: verification still failing at end of budget"
+                answer = repair_answer(ctx)
+                break
 
-            # Step 4 & 5: Run tools, record observations, and format RAG context
-            for tool_call in tool_calls:
-                tool_name, tool_args = self._extract_tool_call_info(tool_call)
-                raw_result, observation_str = self._execute_tool(tool_name, tool_args)
+            refinements += 1
+            self.logger.info("Verification failed, refining (%d): %s", refinements, report.feedback)
+            messages.append(self._construct_message(answer, OllamaEnums.ASSISTANT.value))
+            messages.append(self._construct_message(
+                VERIFIER_FEEDBACK_TEMPLATE.format(feedback=report.feedback), OllamaEnums.USER.value,
+            ))
 
-                if "doctor" in tool_name.lower():
-                    content_to_send = self._format_doctors_context(raw_result)
-                else:
-                    content_to_send = observation_str
-
-                # Append standard tool observation message
-                tool_entry = self._construct_message(
-                    prompt=content_to_send,
-                    role=OllamaEnums.TOOL.value,
-                    truncate=False,
+        if not verified:
+            if not stop_reason.startswith("repaired"):
+                # Budget or LLM failure before a good answer: never leave the patient empty-handed.
+                ctx = VerificationContext(
+                    user_prompt=prompt, answer=answer, red_flags=red_flags, language=language,
+                    returned_urls=returned_urls, doctor_search_hits=doctor_hits,
                 )
-                messages.append(tool_entry)
+                if not answer.strip():
+                    answer = (
+                        "عذرًا، لم أتمكن من إكمال طلبك الآن. حاول تبسيط سؤالك أو أعد المحاولة."
+                        if language == "ar" else
+                        "I'm sorry, I couldn't complete your request this time. "
+                        "Please try a simpler or more specific question."
+                    )
+                    ctx.answer = answer
+                answer = repair_answer(ctx)
 
-        # Max iterations reached
-        self.logger.warning(
-            f"Agent reached maximum iterations ({self.max_iterations}) without concluding."
+        with self._cost_lock:
+            self.total_cost += run_cost
+        start = float(total_cost) if total_cost is not None else 0.0
+
+        new_history = history + [
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": answer},
+        ]
+        return AgentResult(
+            answer=answer,
+            history=new_history,
+            total_cost=start + run_cost,
+            run_cost=run_cost,
+            stop_reason=stop_reason,
+            verified=verified,
+            refinements=refinements,
+            checks=checks,
+            skills_used=skills_used,
+            tool_calls=records,
+            red_flags=red_flags.as_dict() if red_flags.is_emergency else {"is_emergency": False},
+            language=language,
+            usage=budget.usage(),
         )
-        fallback_msg = (
-            "I apologize, but I was unable to complete your request within the allowed steps. "
-            "Please try simplifying your request or asking a more specific question."
-        )
-        messages.append(
-            self._construct_message(
-                prompt=fallback_msg,
-                role=OllamaEnums.ASSISTANT.value,
-                truncate=False,
-            )
-        )
-        return fallback_msg, messages, running_cost

@@ -12,3 +12,7 @@ ENV/
 .uv/
 
 assets
+
+# Eval run reports
+evals/reports/
+.pytest_cache/

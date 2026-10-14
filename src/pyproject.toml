@@ -10,11 +10,10 @@ requires-python = ">=3.10"
 dependencies = [
     "fastapi[standard]>=0.141.1",
     "google-genai>=2.19.0",
-    "ipykernel>=7.3.0",
+    "mcp>=2.2,<3",
     "ollama>=0.6.2",
     "openai>=3.3.1",
     "pandas>=2.2.0",
-    "pathlib>=1.0.1",
     "pydantic-settings>=2.15.0",
     "python-dotenv>=1.2.3",
     "python-telegram-bot>=22.8",
@@ -24,6 +23,18 @@ dependencies = [
     "tqdm>=4.66.0",
     "uvicorn>=0.52.4",
 ]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.3.0",
+    "pytest>=8.0",
+]
+
+[tool.fastapi]
+entrypoint = "app:app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [project.scripts]
 src = "src:main"

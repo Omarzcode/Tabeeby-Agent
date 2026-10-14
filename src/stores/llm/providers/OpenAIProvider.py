@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Union, get_typ
 
 from ..LLMEnums import OpenAIEnums
 from ..LLMInterface import LLMInterface
+from ..retry import with_retries
 
 try:
     from openai import OpenAI
@@ -358,7 +359,7 @@ class OpenAIProvider(LLMInterface):
             if formatted_tools:
                 kwargs["tools"] = formatted_tools
 
-            response = self.client.chat.completions.create(**kwargs)
+            response = with_retries(lambda: self.client.chat.completions.create(**kwargs), label="OpenAI-compatible")
             return self._build_response(response)
 
         except Exception as e:
