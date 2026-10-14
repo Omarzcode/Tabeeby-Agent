@@ -64,3 +64,15 @@ def test_skill_library_progressive_disclosure():
 def test_homepage_link_is_not_treated_as_a_doctor_link():
     r = verify_answer(ctx("Search on https://www.vezeeta.com directly.", urls=(), hits=0))
     assert r.passed
+
+
+def test_arabic_answer_with_latin_doctor_cards_counts_as_arabic():
+    """Doctor names, specialties and links are Latin; the reply is still Arabic."""
+    from agent.safety import answer_language
+    card = ("**1. Dr. Omar Abuelroos** — Dentistry\n📍 El-Maadi · 💰 300 EGP · ⭐ 13 reviews\n"
+            "🔗 https://www.vezeeta.com/en/dr/doctor-omar-abuelroos-dentistry\n"
+            "_Why_: عنده خبرة في علاج الجذور، مناسب لو الألم من العصب.\n")
+    arabic = "ألم الضرس الشديد غالبًا يحتاج دكتور أسنان، ودي أنسب الدكاترة في المعادي:\n"
+    assert answer_language(arabic + card * 5) == "ar"
+    english_card = card.replace("عنده خبرة في علاج الجذور، مناسب لو الألم من العصب.", "experienced in root canals.")
+    assert answer_language("Toothache usually needs a dentist. Here are doctors:\n" + english_card * 2) == "en"

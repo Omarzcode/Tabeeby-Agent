@@ -89,3 +89,29 @@ def test_ollama_provider_sends_api_key_for_cloud():
     p = OllamaProvider(api_key="abc", api_url="https://ollama.com")
     assert p.client._client.headers["authorization"] == "Bearer abc"
     assert "authorization" not in OllamaProvider(api_key=None, api_url=None).client._client.headers
+
+
+def test_openai_provider_uses_max_completion_tokens_and_adapts():
+    """OpenAI rejects `max_tokens` on newer models; Groq-style hosts still use it."""
+    from types import SimpleNamespace
+    from stores.llm.providers.OpenAIProvider import OpenAIProvider
+
+    calls = []
+
+    def create(**kwargs):
+        calls.append(dict(kwargs))
+        if "temperature" in kwargs:
+            raise ValueError("Unsupported value: 'temperature' does not support 0.1 with this model.")
+        msg = SimpleNamespace(content="ok", tool_calls=None)
+        return SimpleNamespace(choices=[SimpleNamespace(message=msg)], usage=None)
+
+    p = OpenAIProvider(api_key="k")
+    p.client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    p.set_generation_model("gpt-5.4-mini")
+    r = p.generate_response(prompt="hi")
+    assert r.message.content == "ok"
+    assert "max_completion_tokens" in calls[0] and "max_tokens" not in calls[0]
+    assert "temperature" not in calls[-1]
+
+    groq = OpenAIProvider(api_key="k", api_url="https://api.groq.com/openai/v1")
+    assert groq._token_limit_param() == "max_tokens"

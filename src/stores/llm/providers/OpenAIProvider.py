@@ -353,18 +353,49 @@ class OpenAIProvider(LLMInterface):
             kwargs: Dict[str, Any] = {
                 "model": self.generation_model_id,
                 "messages": formatted_messages,
-                "max_tokens": max_output_tokens,
+                self._token_limit_param(): max_output_tokens,
                 "temperature": temperature,
             }
             if formatted_tools:
                 kwargs["tools"] = formatted_tools
 
-            response = with_retries(lambda: self.client.chat.completions.create(**kwargs), label="OpenAI-compatible")
+            response = self._create_completion(kwargs)
             return self._build_response(response)
 
         except Exception as e:
             self.logger.error(f"Error while generating text with OpenAI: {e}")
             return None
+
+    def _token_limit_param(self) -> str:
+        """OpenAI's own API wants `max_completion_tokens` (newer models reject
+        `max_tokens`); OpenAI-compatible hosts such as Groq still use `max_tokens`."""
+        if not self.api_url or "api.openai.com" in self.api_url:
+            return "max_completion_tokens"
+        return "max_tokens"
+
+    def _create_completion(self, kwargs: Dict[str, Any]) -> Any:
+        """Call chat.completions, adapting once to models that reject a parameter.
+
+        Some models only accept the default temperature, and hosts disagree on
+        `max_tokens` vs `max_completion_tokens`. On such a 400 error the offending
+        parameter is dropped or renamed and the call is retried.
+        """
+        call = lambda: with_retries(lambda: self.client.chat.completions.create(**kwargs), label="OpenAI-compatible")
+        for _ in range(3):
+            try:
+                return call()
+            except Exception as e:
+                text = str(e)
+                if "temperature" in text and "temperature" in kwargs:
+                    self.logger.warning("Model rejected temperature; retrying with the default.")
+                    kwargs.pop("temperature")
+                elif "max_tokens" in text and "max_tokens" in kwargs:
+                    kwargs["max_completion_tokens"] = kwargs.pop("max_tokens")
+                elif "max_completion_tokens" in text and "max_completion_tokens" in kwargs:
+                    kwargs["max_tokens"] = kwargs.pop("max_completion_tokens")
+                else:
+                    raise
+        return call()
 
     def embed_text(self, text: str, document_type: str = None) -> Optional[List[float]]:
         if not self.client:

@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from agent.safety import detect_language
+from agent.safety import answer_language
 from helpers.bootstrap import build_services
 from tools.catalog import normalize_area, normalize_specialty
 
@@ -44,7 +44,7 @@ def score_case(case: Dict[str, Any], result) -> List[Tuple[str, bool, str]]:
         ok = bool(fees) and all(float(f) <= exp["max_fee_at_most"] for f in fees)
         checks.append(("budget", ok, f"max_fee={fees}"))
     if "language" in exp:
-        checks.append(("language", detect_language(answer) == exp["language"], f"answer language={detect_language(answer)}"))
+        checks.append(("language", answer_language(answer) == exp["language"], f"answer language={answer_language(answer)}"))
     if "emergency" in exp:
         checks.append(("emergency_detected", bool(result.red_flags.get("is_emergency")) == exp["emergency"],
                        f"red_flags={result.red_flags.get('categories', [])}"))

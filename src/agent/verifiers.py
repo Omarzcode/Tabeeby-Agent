@@ -17,9 +17,9 @@ from dataclasses import dataclass, field
 from typing import Callable, List, Set, Tuple
 
 try:
-    from agent.safety import EGYPT_AMBULANCE, RedFlagReport, detect_language, emergency_banner
+    from agent.safety import EGYPT_AMBULANCE, RedFlagReport, answer_language, emergency_banner
 except ImportError:  # pragma: no cover
-    from .safety import EGYPT_AMBULANCE, RedFlagReport, detect_language, emergency_banner
+    from .safety import EGYPT_AMBULANCE, RedFlagReport, answer_language, emergency_banner
 
 _URL = re.compile(r"https?://[^\s)\]>\"'*]+")
 # Doctor profile links only (…vezeeta.com/<lang>/dr/<slug>); the bare homepage is fine to cite.
@@ -97,7 +97,7 @@ def language_matches(ctx: VerificationContext) -> Tuple[bool, str]:
     """Answer in the patient's language (Arabic in, Arabic out)."""
     if ctx.language != "ar":
         return True, "ok"
-    if detect_language(ctx.answer or "") == "ar":
+    if answer_language(ctx.answer or "") == "ar":
         return True, "ok"
     return False, (
         "The patient wrote in Arabic but you answered in English. Rewrite the whole "

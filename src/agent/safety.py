@@ -127,6 +127,23 @@ def detect_language(text: str) -> str:
     return "ar" if arabic >= latin else "en"
 
 
+_URL_IN_TEXT = re.compile(r"https?://\S+")
+ARABIC_ANSWER_MIN_SHARE = 0.25
+
+
+def answer_language(text: str) -> str:
+    """Language of an ANSWER, which mixes scripts: an Arabic reply still carries
+    Latin doctor names, specialties and booking links. Links are ignored, and the
+    answer counts as Arabic once Arabic letters are at least 25% of the rest —
+    an English reply to an Arabic message has almost none."""
+    body = _URL_IN_TEXT.sub(" ", text or "")
+    arabic = len(_ARABIC_CHAR.findall(body))
+    latin = len(_LATIN_CHAR.findall(body))
+    if arabic + latin == 0:
+        return "en"
+    return "ar" if arabic / (arabic + latin) >= ARABIC_ANSWER_MIN_SHARE else "en"
+
+
 def emergency_banner(language: str = "en") -> str:
     """A fixed emergency notice used when the LLM failed to include one."""
     if language == "ar":
