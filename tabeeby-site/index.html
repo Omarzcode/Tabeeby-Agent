@@ -250,17 +250,7 @@ async function restore(){ // redraw the conversation after a page reload
     $("main").scrollTop = $("main").scrollHeight;
   }catch(e){ if(e===0){ sid = null; saveSid(); } }
 }
-// The placeholder types out example complaints until the visitor starts writing.
-async function demo(){
-  const run = ++demoRun;
-  if(matchMedia("(prefers-reduced-motion:reduce)").matches || !$("intro")) return;
-  let i = 0;
-  while(typing && run===demoRun){
-    const s = t("s")[i++ % 4];
-    for(let k=1; k<=s.length && typing && run===demoRun; k++){ input.placeholder = s.slice(0,k); await new Promise(r=>setTimeout(r,45)); }
-    await new Promise(r=>setTimeout(r,1800));
-  }
-}
+function demo(){ input.placeholder = t("ph"); } // static placeholder, no animated examples
 applyLang(); restore();
 </script>
 </body>
