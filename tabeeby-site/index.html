@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ar" dir="ltr">
+<html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -7,6 +7,7 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%230b5d4f'/><path d='M5 17h5l3-7 5 13 3-6h6' fill='none' stroke='white' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 <meta name="theme-color" content="#f3f5f2" media="(prefers-color-scheme:light)"><meta name="theme-color" content="#0b1411" media="(prefers-color-scheme:dark)">
 <link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root{color-scheme:light dark;--bg:#f3f5f2;--sf:#fff;--ink:#14231f;--mut:#5b6c66;--line:#d9e1dc;--pr:#0b5d4f;--prt:#e4f0ec;--on:#fff;--dg:#c8283a}
@@ -90,16 +91,30 @@ textarea::placeholder{color:var(--mut)}
 .send:disabled{opacity:.4;cursor:default}
 .cnt{max-width:760px;margin:4px auto 0;padding-inline:14px;font-size:12.5px;color:var(--mut);text-align:end}.cnt.over{color:var(--dg)}
 .note{max-width:760px;margin:8px auto 0;font-size:12.5px;color:var(--mut);text-align:center;line-height:1.5}
+.pill{min-height:44px;padding:0 18px}
+.cnt,.note{font-size:14px}
+.off{background:var(--dg);color:#fff;text-align:center;font-size:14px;padding:6px 12px}
+.qr{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.qr button{min-height:44px;padding:0 18px;border:1px solid var(--line);background:var(--sf);border-radius:999px;font-size:15px;transition:border-color .15s,color .15s}
+.qr button:hover{border-color:var(--pr);color:var(--pr)}
+.send.stop{background:var(--dg);color:#fff}
+.msg a.book,.alert a{display:inline-flex;align-items:center;min-height:44px}
+.why summary{padding:10px 0}
+.retry{min-height:36px}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<script>try{var l=localStorage.getItem("lang")||"ar";document.documentElement.lang=l;document.documentElement.dir=l==="ar"?"rtl":"ltr"}catch(e){}</script>
+<meta name="description" content="طبيبي يساعدك تلاقي الدكتور المناسب في مصر ويوصّلك لحجز مع دكاترة حقيقيين.">
+<meta property="og:type" content="website"><meta property="og:title" content="طبيبي · Tabeeby"><meta property="og:description" content="Find the right doctor in Egypt, in Arabic or English."><meta property="og:locale" content="ar_EG">
+<script defer crossorigin="anonymous" referrerpolicy="no-referrer" src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script defer crossorigin="anonymous" referrerpolicy="no-referrer" src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
 </head>
 <body>
 <header class="bar"><div class="bar-in">
   <div class="logo"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="var(--pr)"/><path d="M5 17h5l3-7 5 13 3-6h6" fill="none" stroke="var(--on)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><b data-i18n="brand"></b><span class="status" data-i18n="status"></span></div>
   <div class="acts"><button class="pill" id="lang" type="button" aria-label="Switch language">EN</button><button class="pill" id="reset" type="button" data-i18n="reset"></button></div>
 </div></header>
+<div class="off" id="off" role="status" hidden data-i18n="offline"></div>
 <main id="main"><div class="wrap" id="log" role="log" aria-live="polite">
   <section class="hero" id="intro">
     <h1 data-i18n="h1"></h1>
@@ -108,7 +123,7 @@ textarea::placeholder{color:var(--mut)}
   </section>
 </div></main>
 <div class="dock">
-  <form id="form" class="glass">
+  <form id="form">
     <textarea id="input" rows="1" dir="auto" aria-label="Message" maxlength="4000"></textarea>
     <button class="send" id="send" type="submit" aria-label="Send"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
   </form>
@@ -118,9 +133,11 @@ textarea::placeholder{color:var(--mut)}
 <script>
 const API = "https://tabeeby-agent.fastapicloud.dev";
 const STR = {
- ar:{brand:"طبيبي",status:"متاح الآن",h1:"حاسس بإيه؟",h2:"ونوصّلك للدكتور المناسب",reset:"محادثة جديدة",note:"طبيبي بيساعدك تلاقي الدكتور المناسب، مش تشخيص. في الطوارئ اتصل بـ 123.",ph:"اكتب هنا...",btn:"EN",book:"احجز",why:"ليه الدكاترة دول؟",retry:"حاول تاني",alert:"طوارئ: اتصل بالإسعاف 123 فورًا",none:"مفيش رد. جرّب تكتب بشكل تاني.",err:"تعذّر الاتصال بالخدمة. حاول مرة أخرى.",e500:"حصل خطأ. جرّب تاني.",e503:"الخدمة بتشتغل دلوقتي. جرّب بعد ثواني.",rate:"رسائل كتير. استنى {n} ثانية.",long:"الرسالة لازم تكون من حرف لـ 4000 حرف.",timeout:"الرد اتأخر. جرّب تاني.",wait:"بندوّر على الدكاترة، ثواني...",fee:"جنيه",rev:"تقييم",wt:"دقيقة انتظار",
+ ar:{brand:"طبيبي",status:"متاح الآن",h1:"حاسس بإيه؟",h2:"ونوصّلك للدكتور المناسب",reset:"محادثة جديدة",note:"طبيبي بيساعدك تلاقي الدكتور المناسب، مش تشخيص. في الطوارئ اتصل بـ 123. رسايلك بتتبعت لسيرفر طبيبي وبتتحفظ مؤقتًا (لحد 6 ساعات بعد آخر رسالة).",ph:"اكتب هنا...",btn:"EN",book:"احجز",why:"ليه الدكاترة دول؟",title:"طبيبي · دليلك للدكتور المناسب في مصر",desc:"طبيبي يساعدك تلاقي الدكتور المناسب في مصر ويوصّلك لحجز مع دكاترة حقيقيين.",stop:"إيقاف",cancel:"تم إلغاء الطلب.",offline:"مفيش اتصال بالإنترنت.",
+  q:[{l:"أرخص",p:"فيه حد أرخص؟"},{l:"أقرب",p:"فيه حد أقرب ليا؟"},{l:"دكتورة",p:"ممكن دكتورة ست؟"},{l:"انتظار أقل",p:"مين فيهم وقت الانتظار عنده أقل؟"}],retry:"حاول تاني",alert:"طوارئ: اتصل بالإسعاف 123 فورًا",none:"مفيش رد. جرّب تكتب بشكل تاني.",err:"تعذّر الاتصال بالخدمة. حاول مرة أخرى.",e500:"حصل خطأ. جرّب تاني.",e503:"الخدمة بتشتغل دلوقتي. جرّب بعد ثواني.",rate:"رسائل كتير. استنى {n} ثانية.",long:"الرسالة لازم تكون من حرف لـ 4000 حرف.",timeout:"الرد اتأخر. جرّب تاني.",wait:"بندوّر على الدكاترة، ثواني...",fee:"جنيه",rev:"تقييم",wt:"دقيقة انتظار",
   s:["ضرسي بيوجعني جامد وانا في المعادي، ميزانيتي 400","عندي صداع ودوخة بقالي تلات أيام","محتاج دكتور أطفال في مدينة نصر بأقل من 300","تأخر حمل، محتاجة دكتورة كويسة"]},
- en:{brand:"Tabeeby",status:"Online",h1:"Tell us how you feel",h2:"We find the right doctor for you",reset:"New chat",note:"Tabeeby helps you find the right doctor. It is not a diagnosis. In an emergency call 123.",ph:"Type here...",btn:"عربي",book:"Book",why:"Why these doctors",retry:"Retry",alert:"Emergency: call 123 now",none:"No answer was returned. Try rephrasing.",err:"Could not reach Tabeeby. Check your connection and try again.",e500:"Something went wrong. Please try again.",e503:"The service is starting. Try again in a few seconds.",rate:"Too many messages. Please wait {n} seconds.",long:"Messages must be 1 to 4,000 characters.",timeout:"The reply took too long. Please try again.",wait:"Searching doctors, a few seconds...",fee:"EGP",rev:"reviews",wt:"min wait",
+ en:{brand:"Tabeeby",status:"Online",h1:"Tell us how you feel",h2:"We find the right doctor for you",reset:"New chat",note:"Tabeeby helps you find the right doctor. It is not a diagnosis. In an emergency call 123. Your messages are sent to Tabeeby's server and kept temporarily (up to 6 hours after your last message).",ph:"Type here...",btn:"عربي",book:"Book",why:"Why these doctors",title:"Tabeeby · Find the right doctor in Egypt",desc:"Tabeeby helps you find the right doctor in Egypt and book with real doctors.",stop:"Stop",cancel:"Request cancelled.",offline:"You are offline.",
+  q:[{l:"Cheaper",p:"Is there anyone cheaper?"},{l:"Closer",p:"Is there anyone closer to me?"},{l:"Female doctor",p:"Can I see a female doctor?"},{l:"Shorter wait",p:"Who has the shortest waiting time?"}],retry:"Retry",alert:"Emergency: call 123 now",none:"No answer was returned. Try rephrasing.",err:"Could not reach Tabeeby. Check your connection and try again.",e500:"Something went wrong. Please try again.",e503:"The service is starting. Try again in a few seconds.",rate:"Too many messages. Please wait {n} seconds.",long:"Messages must be 1 to 4,000 characters.",timeout:"The reply took too long. Please try again.",wait:"Searching doctors, a few seconds...",fee:"EGP",rev:"reviews",wt:"min wait",
   s:["I have a bad toothache, I live in Maadi, budget 400","Headache and dizziness for three days","I need a pediatrician in Nasr City under 300 EGP","Trying to conceive for a year, need a good specialist"]}
 };
 let lang = "ar";
@@ -129,13 +146,20 @@ const t = k => STR[lang][k];
 const $ = id => document.getElementById(id);
 const log = $("log"), input = $("input"), send = $("send");
 let sid = null; try{ sid = localStorage.getItem("tabeeby_session"); }catch(e){}
-let busy = false, typing = true, demoRun = 0;
+let busy = false, typing = true, demoRun = 0, ctrl = null;
 const INTRO = log.innerHTML;
 const MARK = '<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="var(--pr)"/><path d="M5 17h5l3-7 5 13 3-6h6" fill="none" stroke="var(--on)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ARROW = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
 const ic = d => '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>';
-const ICO = { pin: ic('<path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>'), star: ic('<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>'), clock: ic('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>') };
-function setBusy(b){ busy = b; send.disabled = b; $("reset").disabled = b; }
+const ICO = { pin: ic('<path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>'), rev: ic('<path d="M21 12a8 8 0 0 1-11.5 7.2L4 20l1-4.2A8 8 0 1 1 21 12z"/>'), clock: ic('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>') };
+const SENDI = send.innerHTML;
+const STOPI = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+function setBusy(b){ busy = b; $("reset").disabled = b; send.disabled = b && !ctrl; }
+function setStop(on){ send.classList.toggle("stop", on); send.setAttribute("aria-label", on ? t("stop") : "Send"); send.innerHTML = on ? STOPI : SENDI; send.disabled = busy && !on; }
+const CK = "tabeeby_docs"; // doctor cards are cached per reply, because GET /chat returns text only
+function cacheGet(){ try{ const c = JSON.parse(localStorage.getItem(CK) || "null"); return c && c.sid===sid && Array.isArray(c.items) ? c.items : []; }catch(e){ return []; } }
+function cachePush(d){ if(!sid) return; try{ const items = cacheGet(); items.push({ doctors: Array.isArray(d.doctors) ? d.doctors : [], emergency: !!d.emergency, emergency_numbers: d.emergency_numbers || null }); localStorage.setItem(CK, JSON.stringify({ sid, items: items.slice(-10) })); }catch(e){} }
+function cacheClear(){ try{ localStorage.removeItem(CK); }catch(e){} }
 function saveSid(){ try{ sid ? localStorage.setItem("tabeeby_session", sid) : localStorage.removeItem("tabeeby_session"); }catch(e){} }
 
 function esc(x){ return String(x).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
@@ -160,20 +184,30 @@ function cards(ds){
   return '<div class="cards">' + ds.map(d => {
     const m = [];
     if(d.address) m.push(ICO.pin + esc(d.address));
-    if(d.reviews_count) m.push(ICO.star + d.reviews_count + " " + t("rev"));
-    if(d.waiting_time_min != null) m.push(ICO.clock + Math.round(d.waiting_time_min) + " " + t("wt"));
+    const rc = Number(d.reviews_count); if(rc > 0 && isFinite(rc)) m.push(ICO.rev + Math.round(rc) + " " + t("rev"));
+    const wt = Number(d.waiting_time_min); if(d.waiting_time_min != null && isFinite(wt)) m.push(ICO.clock + Math.round(wt) + " " + t("wt"));
+    const fee = Number(d.fee), hasFee = d.fee != null && isFinite(fee);
     const url = /^https:\/\//.test(d.profile_url || "") ? d.profile_url : "";
-    const stub = (d.fee != null || url) ? '<div class="stub">' + (d.fee != null ? '<span class="fee">' + Math.round(d.fee) + '<small>' + t("fee") + '</small></span>' : "") + (url ? '<a class="book" href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">' + t("book") + '</a>' : "") + '</div>' : "";
+    const stub = (hasFee || url) ? '<div class="stub">' + (hasFee ? '<span class="fee">' + Math.round(fee) + '<small>' + t("fee") + '</small></span>' : "") + (url ? '<a class="book" href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">' + t("book") + '</a>' : "") + '</div>' : "";
     return '<div class="doc"><div class="main"><b>' + esc((d.name || "").replace(/\s+/g, " ").trim()) + '</b><div class="spec">' + esc(d.specialty || "") + '</div>' + (d.subspecialties_text ? '<div class="sub">' + esc(d.subspecialties_text) + '</div>' : "") + '<div class="meta">' + m.map(v => "<span>" + v + "</span>").join("") + '</div></div>' + stub + '</div>';
   }).join("") + '</div>';
 }
 function body(d){ // advice first, then doctor cards, then the full per-doctor details
   const txt = d.response || t("none"), ds = d.doctors;
   if(Array.isArray(ds) && ds.length){
-    const k = txt.search(/^\s*(\*\*)?1[.)]\s/m);
+    const k = txt.search(/^\s*(?:[-*•]\s+)?(?:\*\*)?(?:1|١)\s*[.)\-]/m);
     if(k > 0) return render(txt.slice(0,k).trim()) + cards(ds) + '<details class="why"><summary>' + esc(t("why")) + '</summary>' + render(txt.slice(k)) + '</details>';
   }
   return render(txt) + cards(ds);
+}
+function qr(d){ // follow-up quick replies, shown under the newest answer that has doctors
+  if(d.emergency || !Array.isArray(d.doctors) || !d.doctors.length) return "";
+  const L = STR[d.language] ? d.language : lang;
+  return '<div class="qr">' + STR[L].q.map(x => '<button type="button" data-p="' + esc(x.p) + '">' + esc(x.l) + '</button>').join("") + '</div>';
+}
+function showAlert(d){
+  const nums = d.emergency_numbers ? Object.entries(d.emergency_numbers).map(([k,v]) => '<a href="tel:' + esc(String(v).replace(/[^\d+]/g,"")) + '">' + esc(k) + " " + esc(v) + '</a>').join("") : "";
+  add("alert", "<div>" + esc(t("alert")) + "</div>" + nums);
 }
 function add(kind, html){
   const r = document.createElement("div");
@@ -185,36 +219,37 @@ function add(kind, html){
   if(kind==="alert" || (kind==="bot" && !dots && !afterAlert)) r.scrollIntoView({block:"start"}); else if(!afterAlert) m.scrollTop = m.scrollHeight;
   return r;
 }
-async function ask(text, retry){
+async function ask(text, retry, keep){
   if(busy || !text.trim()) return;
   if(text.length > 4000){ add("bot", esc(t("long"))); return; }
-  typing = false; demoRun++; $("intro")?.remove(); setBusy(true);
+  typing = false; demoRun++; $("intro")?.remove(); log.querySelectorAll(".qr").forEach(e => e.remove());
+  ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort("timeout"), 100000);
+  setBusy(true); setStop(true);
   if(!retry) add("user", esc(text));
-  input.value = ""; input.style.height = "auto"; $("cnt").hidden = true;
+  if(!retry && !keep){ input.value = ""; input.style.height = "auto"; $("cnt").hidden = true; } // retries and chips keep the draft
   const wait = add("bot", '<span class="dots" aria-label="Thinking"><i></i><i></i><i></i></span>');
   const hint = setTimeout(() => wait.querySelector(".msg")?.insertAdjacentHTML("beforeend", '<div class="hint">' + esc(t("wait")) + '</div>'), 8000);
   let cool = 0;
   try{
+    if(!navigator.onLine) throw {msg: t("offline")};
     const r = await fetch(API + "/chat", { method:"POST", headers:{ "Content-Type":"application/json" },
       body: JSON.stringify(sid ? { prompt:text, session_id:sid } : { prompt:text }),
-      signal: AbortSignal.timeout ? AbortSignal.timeout(100000) : undefined });
+      signal: ctrl.signal });
     if(r.status===429){ cool = parseInt(r.headers.get("Retry-After") || "30", 10) || 30; throw {msg: t("rate").replace("{n}", cool)}; }
     if(r.status===422) throw {msg: t("long")};
     if(r.status===503) throw {msg: t("e503")};
     if(!r.ok) throw {msg: t("e500")};
     const d = await r.json(); sid = d.session_id || sid; saveSid(); wait.remove();
-    if(d.emergency){
-      const nums = d.emergency_numbers ? Object.entries(d.emergency_numbers).map(([k,v]) => '<a href="tel:' + esc(String(v).replace(/[^\d+]/g,"")) + '">' + esc(k) + " " + esc(v) + '</a>').join("") : "";
-      add("alert", "<div>" + esc(t("alert")) + "</div>" + nums);
-    }
-    const row = add("bot", body(d));
+    if(d.emergency) showAlert(d);
+    cachePush(d);
+    const row = add("bot", body(d) + qr(d));
     if(d.direction) row.querySelector(".msg").dir = d.direction;
   }catch(e){
     wait.remove();
-    const er = add("bot", esc(e && e.msg ? e.msg : (e && e.name==="TimeoutError" ? t("timeout") : t("err"))) + '<button class="retry" type="button">' + esc(t("retry")) + '</button>');
+    const er = add("bot", esc(e && e.msg ? e.msg : (e==="timeout" ? t("timeout") : (e==="user" || (e && e.name==="AbortError")) ? t("cancel") : !navigator.onLine ? t("offline") : t("err"))) + '<button class="retry" type="button">' + esc(t("retry")) + '</button>');
     er.querySelector(".retry").onclick = () => { if(busy) return; er.remove(); ask(text, true); };
   }
-  clearTimeout(hint);
+  clearTimeout(hint); clearTimeout(timer); ctrl = null; setStop(false);
   if(cool){
     let n = cool; input.placeholder = t("rate").replace("{n}", n);
     const iv = setInterval(() => { n--; if(n > 0){ input.placeholder = t("rate").replace("{n}", n); return; } clearInterval(iv); input.placeholder = t("ph"); setBusy(false); }, 1000);
@@ -223,20 +258,20 @@ async function ask(text, retry){
 function applyLang(){
   const d = document.documentElement; d.lang = lang; d.dir = lang==="ar" ? "rtl" : "ltr";
   document.querySelectorAll("[data-i18n]").forEach(el => el.textContent = t(el.dataset.i18n));
-  $("lang").textContent = t("btn"); input.placeholder = t("ph");
+  $("lang").textContent = t("btn"); document.title = t("title"); document.querySelector("meta[name=description]")?.setAttribute("content", t("desc")); input.placeholder = t("ph");
   try{ localStorage.setItem("lang", lang); }catch(e){}
   const c = $("chips");
-  if(c){ c.innerHTML = ""; t("s").forEach(q => { const b = document.createElement("button"); b.type = "button"; b.className = "chip"; b.innerHTML = "<span></span>" + ARROW; b.firstChild.textContent = q; b.firstChild.dir = "auto"; b.onclick = () => ask(q); c.appendChild(b); }); }
+  if(c){ c.innerHTML = ""; t("s").forEach(q => { const b = document.createElement("button"); b.type = "button"; b.className = "chip"; b.innerHTML = "<span></span>" + ARROW; b.firstChild.textContent = q; b.firstChild.dir = "auto"; b.onclick = () => ask(q, false, true); c.appendChild(b); }); }
   typing = true; demo();
 }
 $("lang").onclick = () => { lang = lang==="ar" ? "en" : "ar"; applyLang(); };
-$("form").addEventListener("submit", e => { e.preventDefault(); ask(input.value); });
-input.addEventListener("keydown", e => { if(e.key==="Enter" && !e.shiftKey && !e.isComposing){ e.preventDefault(); ask(input.value); } });
+$("form").addEventListener("submit", e => { e.preventDefault(); if(ctrl){ ctrl.abort("user"); return; } ask(input.value); });
+input.addEventListener("keydown", e => { if(e.key==="Enter" && !e.shiftKey && !e.isComposing && !matchMedia("(pointer:coarse)").matches){ e.preventDefault(); ask(input.value); } });
 input.addEventListener("input", () => { typing = false; input.style.height = "auto"; input.style.height = input.scrollHeight + "px"; const n = input.value.length, c = $("cnt"); c.hidden = n < 3000; c.textContent = n + " / 4000"; c.classList.toggle("over", n >= 4000); });
 $("reset").onclick = () => {
   if(busy) return;
   if(sid) fetch(API + "/chat/" + encodeURIComponent(sid), { method:"DELETE" }).catch(()=>{});
-  sid = null; saveSid(); log.innerHTML = INTRO; input.value = ""; applyLang(); input.focus();
+  sid = null; saveSid(); cacheClear(); log.innerHTML = INTRO; input.value = ""; applyLang(); input.focus();
 };
 async function restore(){ // redraw the conversation after a page reload
   if(!sid) return;
@@ -246,12 +281,21 @@ async function restore(){ // redraw the conversation after a page reload
     const d = await r.json();
     if(!d.messages || !d.messages.length) throw 0;
     typing = false; demoRun++; $("intro")?.remove(); input.placeholder = t("ph");
-    d.messages.forEach(m => add(m.role==="user" ? "user" : "bot", m.role==="user" ? esc(m.content) : render(m.content)));
+    const items = cacheGet(), asst = d.messages.filter(m => m.role !== "user").length; let a = 0;
+    d.messages.forEach(m => {
+      if(m.role === "user") return add("user", esc(m.content));
+      const i = a++, c = items[items.length - (asst - i)] || {};
+      if(c.emergency) showAlert(c);
+      add("bot", body({ response: m.content, doctors: c.doctors }) + (i === asst - 1 ? qr({ doctors: c.doctors, emergency: c.emergency }) : ""));
+    });
     $("main").scrollTop = $("main").scrollHeight;
   }catch(e){ if(e===0){ sid = null; saveSid(); } }
 }
 function demo(){ input.placeholder = t("ph"); } // static placeholder, no animated examples
-applyLang(); restore();
+log.addEventListener("click", e => { const b = e.target.closest(".qr button"); if(b) ask(b.dataset.p, false, true); });
+function net(){ $("off").hidden = navigator.onLine; }
+addEventListener("online", net); addEventListener("offline", net); net();
+applyLang(); document.addEventListener("DOMContentLoaded", restore);
 </script>
 </body>
 </html>
